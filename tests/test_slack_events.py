@@ -2,7 +2,7 @@ import hashlib
 import hmac
 import json
 import time
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from httpx import AsyncClient
@@ -219,3 +219,232 @@ class TestEventCallback:
         call_args = mock_handle.call_args
         event_arg = call_args[1].get("event") or call_args[0][0]
         assert event_arg.get("thread_ts") or event_arg["ts"] == "9999999999.000001"
+
+    async def test_channel_thread_message_triggers_handler(
+        self, client: AsyncClient
+    ) -> None:
+        """채널 스레드 안에서 멘션 없이 메시지 → 핸들러 호출."""
+        body = json.dumps({
+            "type": "event_callback",
+            "event": {
+                "type": "message",
+                "channel_type": "channel",
+                "user": "U12345",
+                "text": "스레드 내 후속 질문",
+                "channel": "C12345",
+                "ts": "1234567890.000010",
+                "thread_ts": "1234567890.000001",
+            },
+        })
+        headers = _slack_headers(body, settings.slack_signing_secret)
+
+        with patch(
+            "app.api.slack.handle_message_event",
+            new_callable=AsyncMock,
+        ) as mock_handle:
+            response = await client.post(
+                "/slack/events", content=body, headers=headers
+            )
+
+        assert response.status_code == 200
+        assert response.json() == {"ok": True}
+        mock_handle.assert_called_once()
+
+    async def test_channel_message_without_thread_ignored(
+        self, client: AsyncClient
+    ) -> None:
+        """채널 일반 메시지(thread_ts 없음)는 무시."""
+        body = json.dumps({
+            "type": "event_callback",
+            "event": {
+                "type": "message",
+                "channel_type": "channel",
+                "user": "U12345",
+                "text": "일반 채널 메시지",
+                "channel": "C12345",
+                "ts": "1234567890.000003",
+            },
+        })
+        headers = _slack_headers(body, settings.slack_signing_secret)
+
+        with patch(
+            "app.api.slack.handle_message_event",
+            new_callable=AsyncMock,
+        ) as mock_handle:
+            response = await client.post(
+                "/slack/events", content=body, headers=headers
+            )
+
+        assert response.status_code == 200
+        assert response.json() == {"ok": True}
+        mock_handle.assert_not_called()
+
+
+class TestHandleMessageEvent:
+    """handle_message_event 내부 동작 테스트."""
+
+    async def test_channel_thread_without_bot_participation_ignored(
+        self,
+    ) -> None:
+        """봇이 참여하지 않은 스레드 메시지는 무시."""
+        from app.api.slack import handle_message_event
+
+        event = {
+            "type": "message",
+            "channel_type": "channel",
+            "user": "U12345",
+            "text": "봇 없는 스레드 메시지",
+            "channel": "C12345",
+            "ts": "1234567890.000010",
+            "thread_ts": "1234567890.000001",
+        }
+
+        mock_db = AsyncMock()
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = None
+        mock_db.execute.return_value = mock_result
+
+        mock_session_ctx = AsyncMock()
+        mock_session_ctx.__aenter__ = AsyncMock(return_value=mock_db)
+        mock_session_ctx.__aexit__ = AsyncMock(return_value=False)
+
+        with (
+            patch(
+                "app.api.slack.AsyncSessionLocal",
+                return_value=mock_session_ctx,
+            ),
+            patch(
+                "app.api.slack.SlackService"
+            ) as mock_slack_cls,
+        ):
+            mock_slack = AsyncMock()
+            mock_slack_cls.return_value = mock_slack
+
+            await handle_message_event(event=event)
+
+            mock_slack.send_loading_message.assert_not_called()
+
+    async def test_dm_response_without_thread_ts(self) -> None:
+        """DM 응답 시 thread_ts 없이 메시지를 보내야 한다."""
+        from app.api.slack import handle_message_event
+
+        event = {
+            "type": "message",
+            "channel_type": "im",
+            "user": "U12345",
+            "text": "DM 질문",
+            "channel": "D12345",
+            "ts": "1234567890.000002",
+        }
+
+        mock_thread = AsyncMock()
+        mock_thread.id = "thread-uuid"
+
+        mock_db = AsyncMock()
+        mock_result = AsyncMock()
+        mock_result.scalar_one_or_none.return_value = None
+        mock_db.execute.return_value = mock_result
+
+        mock_session_ctx = AsyncMock()
+        mock_session_ctx.__aenter__ = AsyncMock(return_value=mock_db)
+        mock_session_ctx.__aexit__ = AsyncMock(return_value=False)
+
+        mock_query_service = AsyncMock()
+        mock_query_service.has_active_queries.return_value = False
+        mock_query_service.create_query.return_value = AsyncMock(
+            id="query-uuid"
+        )
+
+        with (
+            patch(
+                "app.api.slack.AsyncSessionLocal",
+                return_value=mock_session_ctx,
+            ),
+            patch(
+                "app.api.slack.SlackService"
+            ) as mock_slack_cls,
+            patch(
+                "app.api.slack.QueryService",
+                return_value=mock_query_service,
+            ),
+            patch(
+                "app.api.slack._upsert_slack_thread",
+                return_value=mock_thread,
+            ),
+        ):
+            mock_slack = AsyncMock()
+            mock_slack.send_loading_message.return_value = {
+                "ts": "loading_ts"
+            }
+            mock_slack_cls.return_value = mock_slack
+
+            await handle_message_event(event=event)
+
+            # send_loading_message에 thread_ts가 None이어야 함
+            mock_slack.send_loading_message.assert_called_once()
+            call_kwargs = (
+                mock_slack.send_loading_message.call_args[1]
+            )
+            assert call_kwargs.get("thread_ts") is None
+
+    async def test_channel_thread_with_bot_participation_responds(
+        self,
+    ) -> None:
+        """봇이 참여한 스레드 메시지에는 응답."""
+        from app.api.slack import handle_message_event
+
+        event = {
+            "type": "message",
+            "channel_type": "channel",
+            "user": "U12345",
+            "text": "후속 질문",
+            "channel": "C12345",
+            "ts": "1234567890.000010",
+            "thread_ts": "1234567890.000001",
+        }
+
+        mock_thread = MagicMock()
+        mock_thread.id = "thread-uuid"
+
+        mock_db = AsyncMock()
+        mock_result = MagicMock()
+        # 봇이 참여한 스레드 → SlackThread 존재
+        mock_result.scalar_one_or_none.return_value = mock_thread
+        mock_db.execute.return_value = mock_result
+
+        mock_session_ctx = AsyncMock()
+        mock_session_ctx.__aenter__ = AsyncMock(return_value=mock_db)
+        mock_session_ctx.__aexit__ = AsyncMock(return_value=False)
+
+        mock_query_service = AsyncMock()
+        mock_query_service.has_active_queries.return_value = False
+        mock_query_service.create_query.return_value = AsyncMock(
+            id="query-uuid"
+        )
+
+        with (
+            patch(
+                "app.api.slack.AsyncSessionLocal",
+                return_value=mock_session_ctx,
+            ),
+            patch(
+                "app.api.slack.SlackService"
+            ) as mock_slack_cls,
+            patch(
+                "app.api.slack.QueryService",
+                return_value=mock_query_service,
+            ),
+            patch(
+                "app.api.slack._upsert_slack_thread",
+                return_value=mock_thread,
+            ),
+        ):
+            mock_slack = AsyncMock()
+            mock_slack.send_loading_message.return_value = {
+                "ts": "loading_ts"
+            }
+            mock_slack_cls.return_value = mock_slack
+
+            await handle_message_event(event=event)
+
+            mock_slack.send_loading_message.assert_called_once()

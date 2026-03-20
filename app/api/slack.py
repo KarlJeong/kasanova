@@ -55,8 +55,13 @@ async def slack_events(
         event_type == "message"
         and event.get("channel_type") == "im"
     )
+    is_channel_thread = (
+        event_type == "message"
+        and event.get("channel_type") != "im"
+        and event.get("thread_ts") is not None
+    )
 
-    if not is_app_mention and not is_dm:
+    if not is_app_mention and not is_dm and not is_channel_thread:
         return {"ok": True}
 
     background_tasks.add_task(handle_message_event, event=event)
@@ -67,17 +72,36 @@ async def handle_message_event(event: dict[str, Any]) -> None:
     channel = event["channel"]
     user = event["user"]
     text = event.get("text", "")
+    is_dm = event.get("channel_type") == "im"
+    is_channel_thread = (
+        event.get("type") == "message"
+        and not is_dm
+        and event.get("thread_ts") is not None
+    )
+
     thread_ts = event.get("thread_ts") or event["ts"]
+    # DM에서는 thread_ts 없이 일반 메시지로 응답
+    reply_thread_ts: str | None = None if is_dm else thread_ts
 
     slack_service = SlackService()
 
     async with AsyncSessionLocal() as db:
+        # 채널 스레드 메시지: 봇이 참여한 스레드인지 확인
+        if is_channel_thread:
+            stmt = select(SlackThread).where(
+                SlackThread.slack_channel_id == channel,
+                SlackThread.slack_thread_ts == event["thread_ts"],
+            )
+            result = await db.execute(stmt)
+            if result.scalar_one_or_none() is None:
+                return
+
         query_service = QueryService(db)
 
         if await query_service.has_active_queries(user, limit=2):
             await slack_service.send_message(
                 channel=channel,
-                thread_ts=thread_ts,
+                thread_ts=reply_thread_ts,
                 text="현재 처리 중인 요청이 있습니다."
                 " 잠시 후 다시 질문해주세요.",
             )
@@ -94,7 +118,7 @@ async def handle_message_event(event: dict[str, Any]) -> None:
         )
 
         loading_response = await slack_service.send_loading_message(
-            channel=channel, thread_ts=thread_ts
+            channel=channel, thread_ts=reply_thread_ts
         )
         loading_ts = loading_response["ts"]
 
