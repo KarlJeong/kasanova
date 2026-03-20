@@ -35,13 +35,15 @@ class SlackService:
         self.client = AsyncWebClient(token=settings.slack_bot_token)
 
     async def send_loading_message(
-        self, channel: str, thread_ts: str
+        self, channel: str, thread_ts: str | None = None
     ) -> dict[str, Any]:
-        response = await self.client.chat_postMessage(
-            channel=channel,
-            thread_ts=thread_ts,
-            text="답변을 준비 중입니다... :hourglass_flowing_sand:",
-        )
+        kwargs: dict[str, Any] = {
+            "channel": channel,
+            "text": "답변을 준비 중입니다... :hourglass_flowing_sand:",
+        }
+        if thread_ts is not None:
+            kwargs["thread_ts"] = thread_ts
+        response = await self.client.chat_postMessage(**kwargs)
         return response.data
 
     async def update_message(
@@ -55,11 +57,16 @@ class SlackService:
         return response.data
 
     async def send_message(
-        self, channel: str, thread_ts: str, text: str
+        self,
+        channel: str,
+        text: str,
+        thread_ts: str | None = None,
     ) -> dict[str, Any]:
-        response = await self.client.chat_postMessage(
-            channel=channel,
-            thread_ts=thread_ts,
-            text=text,
-        )
+        kwargs: dict[str, Any] = {
+            "channel": channel,
+            "text": text,
+        }
+        if thread_ts is not None:
+            kwargs["thread_ts"] = thread_ts
+        response = await self.client.chat_postMessage(**kwargs)
         return response.data
