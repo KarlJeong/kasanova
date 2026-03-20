@@ -9,3 +9,4 @@ services:
       - "5433:5432"
     volumes:
       - ./data/pg:/var/lib/postgresql/data
+      - ./docker/postgres/init-test-db.sh:/docker-entrypoint-initdb.d/init-test-db.sh
