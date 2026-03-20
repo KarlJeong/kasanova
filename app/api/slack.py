@@ -1,0 +1,154 @@
+import logging
+from typing import Any
+
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.database import AsyncSessionLocal
+from app.models.slack_thread import SlackThread
+from app.services.query_service import QueryService
+from app.services.slack_service import (
+    SlackService,
+    TimestampExpiredError,
+    verify_signature,
+)
+
+logger = logging.getLogger(__name__)
+
+router = APIRouter()
+
+
+@router.post("/slack/events")
+async def slack_events(
+    request: Request, background_tasks: BackgroundTasks
+) -> dict[str, Any]:
+    body = await request.body()
+    timestamp = request.headers.get("X-Slack-Request-Timestamp", "")
+    signature = request.headers.get("X-Slack-Signature", "")
+
+    try:
+        if not verify_signature(body, timestamp, signature):
+            raise HTTPException(
+                status_code=403, detail="Invalid signature"
+            )
+    except TimestampExpiredError:
+        raise HTTPException(
+            status_code=403, detail="Request too old"
+        )
+
+    payload = await request.json()
+
+    if payload.get("type") == "url_verification":
+        return {"challenge": payload["challenge"]}
+
+    event = payload.get("event", {})
+
+    if event.get("bot_id"):
+        return {"ok": True}
+    if event.get("subtype"):
+        return {"ok": True}
+
+    event_type = event.get("type")
+    is_app_mention = event_type == "app_mention"
+    is_dm = (
+        event_type == "message"
+        and event.get("channel_type") == "im"
+    )
+
+    if not is_app_mention and not is_dm:
+        return {"ok": True}
+
+    background_tasks.add_task(handle_message_event, event=event)
+    return {"ok": True}
+
+
+async def handle_message_event(event: dict[str, Any]) -> None:
+    channel = event["channel"]
+    user = event["user"]
+    text = event.get("text", "")
+    thread_ts = event.get("thread_ts") or event["ts"]
+
+    slack_service = SlackService()
+
+    async with AsyncSessionLocal() as db:
+        query_service = QueryService(db)
+
+        if await query_service.has_active_queries(user, limit=2):
+            await slack_service.send_message(
+                channel=channel,
+                thread_ts=thread_ts,
+                text="현재 처리 중인 요청이 있습니다."
+                " 잠시 후 다시 질문해주세요.",
+            )
+            return
+
+        slack_thread = await _upsert_slack_thread(
+            db, channel, thread_ts, user
+        )
+
+        user_query = await query_service.create_query(
+            slack_thread_id=slack_thread.id,
+            slack_user_id=user,
+            query_text=text,
+        )
+
+        loading_response = await slack_service.send_loading_message(
+            channel=channel, thread_ts=thread_ts
+        )
+        loading_ts = loading_response["ts"]
+
+        await query_service.update_status(
+            user_query.id, "processing"
+        )
+
+        try:
+            # TODO: LangGraph 호출
+            answer = (
+                f"[KasaNova] '{text}'에 대한 답변입니다."
+                " (LangGraph 연결 전)"
+            )
+
+            await query_service.update_status(
+                user_query.id, "completed", answer=answer
+            )
+            await slack_service.update_message(
+                channel=channel, ts=loading_ts, text=answer
+            )
+        except Exception:
+            logger.exception("LangGraph 처리 중 오류 발생")
+            await query_service.update_status(
+                user_query.id, "failed"
+            )
+            await slack_service.update_message(
+                channel=channel,
+                ts=loading_ts,
+                text="처리 중 오류가 발생했습니다."
+                " 잠시 후 다시 시도해주세요.",
+            )
+
+
+async def _upsert_slack_thread(
+    db: AsyncSession,
+    channel: str,
+    thread_ts: str,
+    user: str,
+) -> SlackThread:
+    stmt = select(SlackThread).where(
+        SlackThread.slack_channel_id == channel,
+        SlackThread.slack_thread_ts == thread_ts,
+    )
+    result = await db.execute(stmt)
+    thread = result.scalar_one_or_none()
+
+    if thread is None:
+        thread = SlackThread(
+            slack_channel_id=channel,
+            slack_thread_ts=thread_ts,
+            slack_user_id=user,
+        )
+        db.add(thread)
+        await db.commit()
+        await db.refresh(thread)
+
+    return thread

@@ -5,6 +5,7 @@ from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
+from app.api.slack import router as slack_router
 from app.core.config import settings
 from app.core.database import engine
 
@@ -24,6 +25,8 @@ app = FastAPI(
     debug=settings.debug,
     lifespan=lifespan,
 )
+
+app.include_router(slack_router)
 
 
 @app.get("/health")
