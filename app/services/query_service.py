@@ -1,10 +1,9 @@
 import uuid
-from datetime import datetime, timezone
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.user_query import UserQuery
+from app.models.slack_query import QueryStatusEnum, SlackQuery
 
 
 class QueryService:
@@ -16,24 +15,27 @@ class QueryService:
         slack_thread_id: uuid.UUID,
         slack_user_id: str,
         query_text: str,
-    ) -> UserQuery:
-        user_query = UserQuery(
+    ) -> SlackQuery:
+        slack_query = SlackQuery(
             slack_thread_id=slack_thread_id,
             slack_user_id=slack_user_id,
-            query=query_text,
-            status="pending",
+            query_text=query_text,
+            status=QueryStatusEnum.pending,
         )
-        self.db.add(user_query)
+        self.db.add(slack_query)
         await self.db.commit()
-        await self.db.refresh(user_query)
-        return user_query
+        await self.db.refresh(slack_query)
+        return slack_query
 
     async def has_active_queries(
         self, slack_user_id: str, limit: int = 2
     ) -> bool:
-        stmt = select(func.count()).where(
-            UserQuery.slack_user_id == slack_user_id,
-            UserQuery.status.in_(["pending", "processing"]),
+        stmt = select(func.count()).select_from(SlackQuery).where(
+            SlackQuery.slack_user_id == slack_user_id,
+            SlackQuery.status.in_([
+                QueryStatusEnum.pending,
+                QueryStatusEnum.processing,
+            ]),
         )
         result = await self.db.execute(stmt)
         count = result.scalar_one()
@@ -42,19 +44,17 @@ class QueryService:
     async def update_status(
         self,
         query_id: uuid.UUID,
-        status: str,
+        status: QueryStatusEnum,
         answer: str | None = None,
-    ) -> UserQuery:
-        stmt = select(UserQuery).where(UserQuery.id == query_id)
+    ) -> SlackQuery:
+        stmt = select(SlackQuery).where(SlackQuery.id == query_id)
         result = await self.db.execute(stmt)
-        user_query = result.scalar_one()
+        slack_query = result.scalar_one()
 
-        user_query.status = status
+        slack_query.status = status
         if answer is not None:
-            user_query.answer = answer
-        if status in ("completed", "failed"):
-            user_query.completed_at = datetime.now(timezone.utc)
+            slack_query.response_text = answer
 
         await self.db.commit()
-        await self.db.refresh(user_query)
-        return user_query
+        await self.db.refresh(slack_query)
+        return slack_query

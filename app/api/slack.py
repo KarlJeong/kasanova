@@ -6,6 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import AsyncSessionLocal
+from app.models.slack_query import QueryStatusEnum
 from app.models.slack_thread import SlackThread
 from app.services.query_service import QueryService
 from app.services.slack_service import (
@@ -123,7 +124,7 @@ async def handle_message_event(event: dict[str, Any]) -> None:
         loading_ts = loading_response["ts"]
 
         await query_service.update_status(
-            user_query.id, "processing"
+            user_query.id, QueryStatusEnum.processing
         )
 
         try:
@@ -134,7 +135,8 @@ async def handle_message_event(event: dict[str, Any]) -> None:
             )
 
             await query_service.update_status(
-                user_query.id, "completed", answer=answer
+                user_query.id, QueryStatusEnum.completed,
+                answer=answer,
             )
             await slack_service.update_message(
                 channel=channel, ts=loading_ts, text=answer
@@ -142,7 +144,7 @@ async def handle_message_event(event: dict[str, Any]) -> None:
         except Exception:
             logger.exception("LangGraph 처리 중 오류 발생")
             await query_service.update_status(
-                user_query.id, "failed"
+                user_query.id, QueryStatusEnum.failed
             )
             await slack_service.update_message(
                 channel=channel,
