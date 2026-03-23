@@ -24,18 +24,16 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         await conn.execute(text("SELECT 1"))
 
     # LLM + Checkpointer + Workflow
-    checkpointer = AsyncPostgresSaver.from_conn_string(
+    async with AsyncPostgresSaver.from_conn_string(
         settings.checkpoint_db_url
-    )
-    await checkpointer.setup()
-    llm = get_llm()
-    app.state.workflow = build_workflow(checkpointer, llm)
-    app.state.checkpointer = checkpointer
+    ) as checkpointer:
+        await checkpointer.setup()
+        llm = get_llm()
+        app.state.workflow = build_workflow(checkpointer, llm)
 
-    yield
+        yield
 
     # Shutdown
-    await checkpointer.conn.close()
     await engine.dispose()
 
 

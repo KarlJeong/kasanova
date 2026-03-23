@@ -20,9 +20,10 @@ class Settings(BaseSettings):
 
     @cached_property
     def checkpoint_db_url(self) -> str:
-        return self.database_url.replace(
+        url = self.database_url.replace(
             "postgresql+asyncpg://", "postgresql://"
         )
+        return url.replace("ssl=disable", "sslmode=disable")
 
     model_config = SettingsConfigDict(env_file=".env")
 
