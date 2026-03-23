@@ -16,7 +16,11 @@ pydantic-settings = "^2.0"
 python-dotenv = "^1.0"
 slack-sdk = "^3.33"
 langchain = "^0.3"
+langchain-ollama = "^0.3"
+langchain-openai = "^0.3"
+langchain-anthropic = "^0.3"
 langgraph = "^0.2"
+langgraph-checkpoint-postgres = "^2.0"
 greenlet = "^3.3.2"
 
 [tool.poetry.group.dev.dependencies]
