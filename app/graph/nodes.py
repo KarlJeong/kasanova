@@ -1,7 +1,11 @@
+import logging
+
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, SystemMessage
 
 from app.graph.state import KasaNovaState
+
+logger = logging.getLogger(__name__)
 
 SYSTEM_PROMPT = (
     "당신은 KasaNova입니다. 사내 지식 검색을 돕는 AI 어시스턴트입니다.\n"
@@ -15,5 +19,23 @@ async def call_llm(
     state: KasaNovaState, llm: BaseChatModel
 ) -> dict:
     messages = [SystemMessage(content=SYSTEM_PROMPT)] + state["messages"]
+    logger.info("[LLM] 호출 시작 (메시지 %d개)", len(messages))
     response: AIMessage = await llm.ainvoke(messages)
+    if response.tool_calls:
+        logger.info(
+            "[LLM] tool_calls 반환 (%d건)", len(response.tool_calls)
+        )
+        for i, tc in enumerate(response.tool_calls, 1):
+            logger.info(
+                "[LLM]   └ [%d/%d] %s(%s)",
+                i,
+                len(response.tool_calls),
+                tc["name"],
+                tc["args"],
+            )
+    else:
+        logger.info(
+            "[LLM] 최종 응답 반환: %s",
+            response.content[:200] if response.content else "(empty)",
+        )
     return {"messages": [response]}

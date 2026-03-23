@@ -87,7 +87,10 @@ async def handle_message_event(
         and event.get("thread_ts") is not None
     )
 
-    thread_ts = event.get("thread_ts") or event["ts"]
+    if is_dm:
+        thread_ts = "dm"  # DM은 채널당 하나의 스레드로 취급
+    else:
+        thread_ts = event.get("thread_ts") or event["ts"]
     # DM에서는 thread_ts 없이 일반 메시지로 응답
     reply_thread_ts: str | None = None if is_dm else thread_ts
 
