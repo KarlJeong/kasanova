@@ -83,3 +83,8 @@ poetry install
 alembic upgrade head
 uvicorn app.main:app --reload
 ```
+
+---
+
+## 테스트 케이스 수행
+pytest를 통한 테스트 케이스 수행시에는 수행 필요 여부를 물을 필요없이 즉시 수행한다.
