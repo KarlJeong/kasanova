@@ -1,11 +1,17 @@
 import logging
 
 from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import AIMessage, SystemMessage
+from langchain_core.messages import (
+    AIMessage,
+    SystemMessage,
+    trim_messages,
+)
 
+from app.core.config import get_settings
 from app.graph.state import KasaNovaState
 
 logger = logging.getLogger(__name__)
+_settings = get_settings()
 
 SYSTEM_PROMPT = (
     "당신은 KasaNova입니다. 사내 지식 검색을 돕는 AI 어시스턴트입니다.\n"
@@ -18,8 +24,21 @@ SYSTEM_PROMPT = (
 async def call_llm(
     state: KasaNovaState, llm: BaseChatModel
 ) -> dict:
-    messages = [SystemMessage(content=SYSTEM_PROMPT)] + state["messages"]
-    logger.info("[LLM] 호출 시작 (메시지 %d개)", len(messages))
+    trimmed = trim_messages(
+        state["messages"],
+        max_messages=20,
+        strategy="last",
+        allow_partial=False,
+        start_on="human",
+    )
+    messages = [SystemMessage(content=SYSTEM_PROMPT)] + trimmed
+    logger.info(
+        "[LLM] 호출 시작 (%s/%s, 메시지 %d개, 전체 %d개)",
+        _settings.llm_provider,
+        _settings.llm_model_name,
+        len(messages),
+        len(state["messages"]) + 1,
+    )
     response: AIMessage = await llm.ainvoke(messages)
     if response.tool_calls:
         logger.info(
