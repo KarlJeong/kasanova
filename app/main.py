@@ -13,6 +13,12 @@ from app.core.database import engine
 from app.core.llm import get_llm
 from app.graph.workflow import build_workflow
 
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s | %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+
 logger = logging.getLogger(__name__)
 settings = get_settings()
 
