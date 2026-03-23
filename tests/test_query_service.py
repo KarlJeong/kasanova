@@ -1,8 +1,7 @@
 import uuid
-from datetime import datetime, timezone
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
     async_sessionmaker,
@@ -11,8 +10,8 @@ from sqlalchemy.ext.asyncio import (
 
 from app.core.config import settings
 from app.core.database import Base
+from app.models.slack_query import QueryStatusEnum, SlackQuery
 from app.models.slack_thread import SlackThread
-from app.models.user_query import UserQuery
 from app.services.query_service import QueryService
 
 
@@ -20,10 +19,19 @@ from app.services.query_service import QueryService
 async def db_engine():
     engine = create_async_engine(settings.database_url, echo=False)
     async with engine.begin() as conn:
+        await conn.execute(text("DROP TABLE IF EXISTS user_queries CASCADE"))
+        await conn.execute(text("DROP TABLE IF EXISTS slack_queries CASCADE"))
+        await conn.execute(text("DROP TABLE IF EXISTS slack_threads CASCADE"))
+        await conn.execute(text(
+            "DROP TYPE IF EXISTS query_status_enum CASCADE"
+        ))
         await conn.run_sync(Base.metadata.create_all)
     yield engine
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.drop_all)
+        await conn.execute(text(
+            "DROP TYPE IF EXISTS query_status_enum CASCADE"
+        ))
     await engine.dispose()
 
 
@@ -60,14 +68,13 @@ class TestQueryService:
             query_text="오늘 증시 현황 알려줘",
         )
 
-        assert query.status == "pending"
-        assert query.query == "오늘 증시 현황 알려줘"
+        assert query.status == QueryStatusEnum.pending
+        assert query.query_text == "오늘 증시 현황 알려줘"
         assert query.slack_user_id == "U_TEST_USER"
         assert query.slack_thread_id == slack_thread.id
         assert isinstance(query.id, uuid.UUID)
         assert query.created_at is not None
-        assert query.answer is None
-        assert query.completed_at is None
+        assert query.response_text is None
 
     async def test_has_active_queries_false(
         self, db_session: AsyncSession, slack_thread: SlackThread
@@ -103,7 +110,9 @@ class TestQueryService:
             slack_user_id="U_TEST_USER",
             query_text="완료된 질문",
         )
-        await service.update_status(q.id, "completed", answer="답변")
+        await service.update_status(
+            q.id, QueryStatusEnum.completed, answer="답변"
+        )
 
         result = await service.has_active_queries("U_TEST_USER", limit=2)
         assert result is False
@@ -117,8 +126,10 @@ class TestQueryService:
             slack_user_id="U_TEST_USER",
             query_text="처리중 질문",
         )
-        updated = await service.update_status(q.id, "processing")
-        assert updated.status == "processing"
+        updated = await service.update_status(
+            q.id, QueryStatusEnum.processing
+        )
+        assert updated.status == QueryStatusEnum.processing
 
     async def test_update_status_to_completed(
         self, db_session: AsyncSession, slack_thread: SlackThread
@@ -130,11 +141,10 @@ class TestQueryService:
             query_text="완료 질문",
         )
         updated = await service.update_status(
-            q.id, "completed", answer="최종 답변"
+            q.id, QueryStatusEnum.completed, answer="최종 답변"
         )
-        assert updated.status == "completed"
-        assert updated.answer == "최종 답변"
-        assert updated.completed_at is not None
+        assert updated.status == QueryStatusEnum.completed
+        assert updated.response_text == "최종 답변"
 
     async def test_update_status_to_failed(
         self, db_session: AsyncSession, slack_thread: SlackThread
@@ -145,6 +155,7 @@ class TestQueryService:
             slack_user_id="U_TEST_USER",
             query_text="실패 질문",
         )
-        updated = await service.update_status(q.id, "failed")
-        assert updated.status == "failed"
-        assert updated.completed_at is not None
+        updated = await service.update_status(
+            q.id, QueryStatusEnum.failed
+        )
+        assert updated.status == QueryStatusEnum.failed
