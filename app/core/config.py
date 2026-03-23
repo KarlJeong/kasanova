@@ -17,6 +17,7 @@ class Settings(BaseSettings):
     llm_server_url: str = "http://localhost:11434"
     llm_model_name: str = "phi3"
     llm_api_key: str = ""
+    TAVILY_API_KEY: str
 
     @cached_property
     def checkpoint_db_url(self) -> str:
