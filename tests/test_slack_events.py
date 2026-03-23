@@ -320,7 +320,9 @@ class TestHandleMessageEvent:
             mock_slack = AsyncMock()
             mock_slack_cls.return_value = mock_slack
 
-            await handle_message_event(event=event)
+            await handle_message_event(
+                event=event, workflow=AsyncMock()
+            )
 
             mock_slack.send_loading_message.assert_not_called()
 
@@ -378,7 +380,15 @@ class TestHandleMessageEvent:
             }
             mock_slack_cls.return_value = mock_slack
 
-            await handle_message_event(event=event)
+            mock_workflow = AsyncMock()
+            mock_workflow.ainvoke.return_value = {
+                "messages": [
+                    MagicMock(content="mocked answer")
+                ]
+            }
+            await handle_message_event(
+                event=event, workflow=mock_workflow
+            )
 
             # send_loading_message에 thread_ts가 None이어야 함
             mock_slack.send_loading_message.assert_called_once()
@@ -445,6 +455,14 @@ class TestHandleMessageEvent:
             }
             mock_slack_cls.return_value = mock_slack
 
-            await handle_message_event(event=event)
+            mock_workflow = AsyncMock()
+            mock_workflow.ainvoke.return_value = {
+                "messages": [
+                    MagicMock(content="mocked answer")
+                ]
+            }
+            await handle_message_event(
+                event=event, workflow=mock_workflow
+            )
 
             mock_slack.send_loading_message.assert_called_once()

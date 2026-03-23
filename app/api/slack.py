@@ -2,6 +2,7 @@ import logging
 from typing import Any
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
+from langchain_core.messages import AIMessage, HumanMessage
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -65,11 +66,17 @@ async def slack_events(
     if not is_app_mention and not is_dm and not is_channel_thread:
         return {"ok": True}
 
-    background_tasks.add_task(handle_message_event, event=event)
+    background_tasks.add_task(
+        handle_message_event,
+        event=event,
+        workflow=request.app.state.workflow,
+    )
     return {"ok": True}
 
 
-async def handle_message_event(event: dict[str, Any]) -> None:
+async def handle_message_event(
+    event: dict[str, Any], workflow: Any = None
+) -> None:
     channel = event["channel"]
     user = event["user"]
     text = event.get("text", "")
@@ -128,11 +135,17 @@ async def handle_message_event(event: dict[str, Any]) -> None:
         )
 
         try:
-            # TODO: LangGraph 호출
-            answer = (
-                f"[KasaNova] '{text}'에 대한 답변입니다."
-                " (LangGraph 연결 전)"
+            config = {
+                "configurable": {
+                    "thread_id": str(slack_thread.id)
+                }
+            }
+            result = await workflow.ainvoke(
+                {"messages": [HumanMessage(content=text)]},
+                config=config,
             )
+            answer_message: AIMessage = result["messages"][-1]
+            answer: str = answer_message.content
 
             await query_service.update_status(
                 user_query.id, QueryStatusEnum.completed,

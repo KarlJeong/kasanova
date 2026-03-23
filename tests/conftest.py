@@ -1,4 +1,5 @@
 from collections.abc import AsyncGenerator
+from unittest.mock import AsyncMock
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -23,6 +24,7 @@ TEST_DATABASE_URL = _base + ("?" + _params if _params else "")
 
 @pytest.fixture
 async def client() -> AsyncGenerator[AsyncClient, None]:
+    app.state.workflow = AsyncMock()
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
         yield ac
