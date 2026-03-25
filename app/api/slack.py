@@ -148,7 +148,10 @@ async def handle_message_event(
                 config=config,
             )
             answer_message: AIMessage = result["messages"][-1]
-            answer: str = answer_message.content
+            answer: str = (
+                answer_message.content
+                or "응답을 생성하지 못했습니다."
+            )
 
             await query_service.update_status(
                 user_query.id, QueryStatusEnum.completed,

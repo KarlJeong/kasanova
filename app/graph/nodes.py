@@ -82,6 +82,14 @@ async def call_llm(
         len(state["messages"]) + 1,
     )
     response: AIMessage = await llm.ainvoke(messages)
+    logger.info(
+        "[LLM] 응답 원본: content=%r, tool_calls=%r, "
+        "additional_kwargs=%r, response_metadata=%r",
+        response.content,
+        response.tool_calls,
+        response.additional_kwargs,
+        response.response_metadata,
+    )
     if response.tool_calls:
         logger.info(
             "[LLM] tool_calls 반환 (%d건)", len(response.tool_calls)
