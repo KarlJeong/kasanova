@@ -8,4 +8,18 @@ services:
     ports:
       - "5433:5432"
     volumes:
-      - ./data/pg:/var/lib/postgresql/data
+      - ./data/kasanova/pg:/var/lib/postgresql/data
+
+  opensearch:
+    build:
+      context: ./opensearch
+    platform: linux/amd64
+    environment:
+      - discovery.type=single-node
+      - DISABLE_SECURITY_PLUGIN=true
+      - OPENSEARCH_JAVA_OPTS=-Xms512m -Xmx512m
+    ports:
+      - "9200:9200"
+    volumes:
+      - ./data/opensearch:/usr/share/opensearch/data
+    restart: unless-stopped

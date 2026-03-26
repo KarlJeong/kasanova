@@ -1,5 +1,6 @@
 .env
 data/
+opensearch/
 __pycache__/
 *.pyc
 .pytest_cache/
