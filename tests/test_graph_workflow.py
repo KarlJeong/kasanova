@@ -11,12 +11,20 @@ from langgraph.checkpoint.memory import MemorySaver
 from app.graph.workflow import build_workflow
 
 
+def _make_mock_searcher() -> AsyncMock:
+    searcher = AsyncMock()
+    searcher.search = AsyncMock(return_value=[])
+    return searcher
+
+
 class TestBuildWorkflow:
     def test_returns_compiled_graph(self) -> None:
         mock_llm = AsyncMock()
         mock_llm.bind_tools = MagicMock(return_value=mock_llm)
         checkpointer = MemorySaver()
-        workflow = build_workflow(checkpointer, mock_llm)
+        workflow = build_workflow(
+            checkpointer, mock_llm, _make_mock_searcher()
+        )
         assert hasattr(workflow, "ainvoke")
 
     async def test_ainvoke_produces_ai_message(self) -> None:
@@ -24,7 +32,9 @@ class TestBuildWorkflow:
         mock_llm.ainvoke.return_value = AIMessage(content="답변입니다")
         mock_llm.bind_tools = MagicMock(return_value=mock_llm)
         checkpointer = MemorySaver()
-        workflow = build_workflow(checkpointer, mock_llm)
+        workflow = build_workflow(
+            checkpointer, mock_llm, _make_mock_searcher()
+        )
 
         config = {"configurable": {"thread_id": "test-thread-1"}}
         result = await workflow.ainvoke(
@@ -44,7 +54,9 @@ class TestBuildWorkflow:
         ]
         mock_llm.bind_tools = MagicMock(return_value=mock_llm)
         checkpointer = MemorySaver()
-        workflow = build_workflow(checkpointer, mock_llm)
+        workflow = build_workflow(
+            checkpointer, mock_llm, _make_mock_searcher()
+        )
 
         config = {"configurable": {"thread_id": "test-thread-2"}}
 
@@ -95,7 +107,9 @@ class TestReActWorkflow:
         mock_llm.bind_tools = MagicMock(return_value=mock_llm)
 
         checkpointer = MemorySaver()
-        workflow = build_workflow(checkpointer, mock_llm)
+        workflow = build_workflow(
+            checkpointer, mock_llm, _make_mock_searcher()
+        )
 
         config = {"configurable": {"thread_id": "react-test-1"}}
         result = await workflow.ainvoke(
@@ -136,7 +150,9 @@ class TestReActWorkflow:
         mock_llm.bind_tools = MagicMock(return_value=mock_llm)
 
         checkpointer = MemorySaver()
-        workflow = build_workflow(checkpointer, mock_llm)
+        workflow = build_workflow(
+            checkpointer, mock_llm, _make_mock_searcher()
+        )
 
         config = {"configurable": {"thread_id": "react-test-2"}}
         result = await workflow.ainvoke(
@@ -164,7 +180,9 @@ class TestReActWorkflow:
         mock_llm.bind_tools = MagicMock(return_value=mock_llm)
 
         checkpointer = MemorySaver()
-        workflow = build_workflow(checkpointer, mock_llm)
+        workflow = build_workflow(
+            checkpointer, mock_llm, _make_mock_searcher()
+        )
 
         config = {"configurable": {"thread_id": "react-test-3"}}
         result = await workflow.ainvoke(

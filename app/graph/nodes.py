@@ -11,6 +11,7 @@ from langchain_core.messages import (
 
 from app.core.config import get_settings
 from app.graph.state import KasaNovaState
+from app.rag.searcher import HybridSearcher
 
 logger = logging.getLogger(__name__)
 _settings = get_settings()
@@ -57,9 +58,28 @@ _SYSTEM_PROMPT_TEMPLATE = (
 )
 
 
-def _build_system_prompt() -> str:
+def _build_system_prompt(
+    retrieved_docs: list[dict] | None = None,
+) -> str:
     now = datetime.now(_KST).strftime("%Y-%m-%d %H:%M:%S")
-    return _SYSTEM_PROMPT_TEMPLATE.format(now=now)
+    prompt = _SYSTEM_PROMPT_TEMPLATE.format(now=now)
+
+    if retrieved_docs:
+        context_parts = []
+        for doc in retrieved_docs:
+            context_parts.append(
+                f"[{doc['source']}] {doc['content']}"
+            )
+        context = "\n\n".join(context_parts)
+        prompt += (
+            "\n## Retrieved Context\n"
+            "Answer based on the following retrieved"
+            " documents. If the answer is not in the"
+            " context, say so.\n\n"
+            f"{context}\n"
+        )
+
+    return prompt
 
 
 async def call_llm(
@@ -73,7 +93,12 @@ async def call_llm(
         allow_partial=False,
         start_on="human",
     )
-    messages = [SystemMessage(content=_build_system_prompt())] + trimmed
+    retrieved_docs = state.get("retrieved_docs")
+    messages = [
+        SystemMessage(
+            content=_build_system_prompt(retrieved_docs)
+        )
+    ] + trimmed
     logger.info(
         "[LLM] 호출 시작 (%s/%s, 메시지 %d개, 전체 %d개)",
         _settings.llm_provider,
@@ -108,3 +133,23 @@ async def call_llm(
             response.content[:200] if response.content else "(empty)",
         )
     return {"messages": [response]}
+
+
+async def retrieve(
+    state: KasaNovaState, searcher: HybridSearcher
+) -> dict:
+    """마지막 사용자 메시지로 하이브리드 검색을 수행한다."""
+    query = ""
+    for msg in reversed(state["messages"]):
+        if msg.type == "human":
+            query = msg.content
+            break
+
+    if not query:
+        logger.warning("[Retrieve] 사용자 메시지를 찾을 수 없음")
+        return {"retrieved_docs": []}
+
+    logger.info("[Retrieve] 검색 시작: %s", query[:100])
+    docs = await searcher.search(query)
+    logger.info("[Retrieve] %d건 검색 완료", len(docs))
+    return {"retrieved_docs": docs}
