@@ -1,3 +1,4 @@
+import logging
 from pathlib import Path
 
 from fastapi import (
@@ -50,6 +51,7 @@ async def upload_document(
             detail=f"파일 파싱 실패: {e}",
         )
     except Exception as e:
+        logging.getLogger(__name__).exception("인덱싱 실패")
         raise HTTPException(
             status_code=500,
             detail=f"인덱싱 실패: {e}",
