@@ -7,7 +7,12 @@ class Embedder:
     def __init__(
         self, model_name: str = "nlpai-lab/KURE-v1"
     ) -> None:
-        self.model = SentenceTransformer(model_name)
+        try:
+            self.model = SentenceTransformer(
+                model_name, local_files_only=True
+            )
+        except OSError:
+            self.model = SentenceTransformer(model_name)
 
     def encode(
         self, texts: list[str], batch_size: int = 32

@@ -1,6 +1,11 @@
 import logging
+import os
 from contextlib import asynccontextmanager
 from collections.abc import AsyncGenerator
+
+os.environ.setdefault(
+    "HF_HOME", os.path.expanduser("~/.cache/huggingface")
+)
 
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
