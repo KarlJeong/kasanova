@@ -21,6 +21,7 @@ from app.core.llm import get_llm
 from app.graph.workflow import build_workflow
 from app.rag.embedder import Embedder
 from app.rag.indexer import DocumentIndexer
+from app.rag.searcher import HybridSearcher
 
 logging.basicConfig(
     level=logging.INFO,
@@ -70,10 +71,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         settings.checkpoint_db_url
     ) as checkpointer:
         await checkpointer.setup()
-        llm = get_llm()
-        app.state.workflow = build_workflow(checkpointer, llm)
-
-        # RAG: Embedder + OpenSearch + Indexer
+        # RAG: Embedder + OpenSearch
         embedder = Embedder()
         logger.info("KURE-v1 임베딩 모델 로드 완료")
 
@@ -97,6 +95,18 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             index_name=index_name,
         )
         logger.info("RAG 인덱서 준비 완료")
+
+        searcher = HybridSearcher(
+            os_client=os_client,
+            embedder=embedder,
+            index_name=index_name,
+        )
+        logger.info("하이브리드 검색기 준비 완료")
+
+        llm = get_llm()
+        app.state.workflow = build_workflow(
+            checkpointer, llm, searcher
+        )
 
         yield
 
