@@ -23,6 +23,12 @@ langgraph = "^0.2"
 langgraph-checkpoint-postgres = "^2.0"
 greenlet = "^3.3.2"
 tavily-python = "^0.5"
+PyMuPDF = "^1.24"
+python-pptx = "^1.0"
+python-docx = "^1.1"
+sentence-transformers = "^3.0"
+opensearch-py = { version = "^2.5", extras = ["async"] }
+python-multipart = "^0.0.9"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.0"
