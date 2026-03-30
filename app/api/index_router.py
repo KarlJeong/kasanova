@@ -4,6 +4,7 @@ from pathlib import Path
 from fastapi import (
     APIRouter,
     File,
+    Form,
     HTTPException,
     Request,
     UploadFile,
@@ -26,6 +27,7 @@ def _get_indexer(request: Request) -> DocumentIndexer:
 async def upload_document(
     request: Request,
     file: UploadFile = File(...),
+    category: str = Form("general"),
 ) -> dict:
     """문서를 업로드하고 인덱싱한다."""
     indexer = _get_indexer(request)
@@ -39,6 +41,7 @@ async def upload_document(
             filename=filename,
             file_type=file_type,
             content=content,
+            category=category,
         )
     except UnsupportedFormatError:
         raise HTTPException(
