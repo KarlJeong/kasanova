@@ -1,11 +1,23 @@
 import hashlib
 import hmac
+import re
 import time
 from typing import Any
 
 from slack_sdk.web.async_client import AsyncWebClient
 
 from app.core.config import settings
+
+
+def md_to_slack(text: str) -> str:
+    """Markdown → Slack mrkdwn 변환."""
+    # **bold** → *bold*  (코드블록 내부는 제외)
+    text = re.sub(r"\*\*(.+?)\*\*", r"*\1*", text)
+    # ## heading → *heading*
+    text = re.sub(r"^#{1,6}\s+(.+)$", r"*\1*", text, flags=re.MULTILINE)
+    # --- 수평선 제거
+    text = re.sub(r"^-{3,}$", "", text, flags=re.MULTILINE)
+    return text
 
 
 def verify_signature(
@@ -52,7 +64,7 @@ class SlackService:
         response = await self.client.chat_update(
             channel=channel,
             ts=ts,
-            text=text,
+            text=md_to_slack(text),
         )
         return response.data
 
@@ -64,7 +76,7 @@ class SlackService:
     ) -> dict[str, Any]:
         kwargs: dict[str, Any] = {
             "channel": channel,
-            "text": text,
+            "text": md_to_slack(text),
         }
         if thread_ts is not None:
             kwargs["thread_ts"] = thread_ts
