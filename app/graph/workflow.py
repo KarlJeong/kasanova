@@ -6,7 +6,7 @@ from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph import START, StateGraph
 from langgraph.prebuilt import ToolNode, tools_condition
 
-from app.graph.nodes import call_llm, retrieve
+from app.graph.nodes import call_llm
 from app.graph.state import KasaNovaState
 from app.graph.tools import create_web_search_tool
 from app.rag.retrieval_tool import create_retrieval_tool
@@ -26,9 +26,6 @@ def build_workflow(
     llm_with_tools = llm.bind_tools(tools)
     tool_node = ToolNode(tools)
 
-    async def _retrieve(state: KasaNovaState) -> dict:
-        return await retrieve(state, searcher)
-
     async def _call_llm(state: KasaNovaState) -> dict:
         return await call_llm(state, llm_with_tools)
 
@@ -47,12 +44,10 @@ def build_workflow(
         return result
 
     builder = StateGraph(KasaNovaState)
-    builder.add_node("retrieve", _retrieve)
     builder.add_node("call_llm", _call_llm)
     builder.add_node("tools", _tool_node)
 
-    builder.add_edge(START, "retrieve")
-    builder.add_edge("retrieve", "call_llm")
+    builder.add_edge(START, "call_llm")
     builder.add_conditional_edges("call_llm", tools_condition)
     builder.add_edge("tools", "call_llm")
 
