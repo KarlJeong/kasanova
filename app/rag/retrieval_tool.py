@@ -1,6 +1,10 @@
+import logging
+
 from langchain_core.tools import BaseTool, tool
 
 from app.rag.searcher import HybridSearcher
+
+logger = logging.getLogger(__name__)
 
 
 def create_retrieval_tool(searcher: HybridSearcher) -> BaseTool:
@@ -18,7 +22,22 @@ def create_retrieval_tool(searcher: HybridSearcher) -> BaseTool:
             return f"사내 문서 검색 중 오류가 발생했습니다: {e}"
 
         if not results:
+            logger.info("[retrieval_tool] 검색 결과 없음")
             return "검색 결과가 없습니다."
+
+        for i, doc in enumerate(results, 1):
+            preview = doc["content"][:80].replace(
+                "\n", " "
+            )
+            logger.info(
+                "[retrieval_tool] [%d/%d] score=%.4f"
+                " len=%d '%s...'",
+                i,
+                len(results),
+                doc["score"],
+                len(doc["content"]),
+                preview,
+            )
 
         parts: list[str] = []
         for i, doc in enumerate(results, 1):
