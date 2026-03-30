@@ -130,3 +130,37 @@ class TestRetrievalTool:
 
         assert isinstance(result, str)
         assert "검색 결과가 없습니다" in result
+
+    async def test_category_hr_adds_post_filter(
+        self, tool: BaseTool, searcher: HybridSearcher
+    ) -> None:
+        await tool.ainvoke(
+            {"query": "연차", "category": "hr"}
+        )
+
+        call_kwargs = searcher.os_client.search.call_args[1]
+        post_filter = call_kwargs["body"]["post_filter"]
+        assert post_filter == {
+            "term": {"metadata.category": "hr"}
+        }
+
+    async def test_category_ops_adds_post_filter(
+        self, tool: BaseTool, searcher: HybridSearcher
+    ) -> None:
+        await tool.ainvoke(
+            {"query": "운영 지침", "category": "ops"}
+        )
+
+        call_kwargs = searcher.os_client.search.call_args[1]
+        post_filter = call_kwargs["body"]["post_filter"]
+        assert post_filter == {
+            "term": {"metadata.category": "ops"}
+        }
+
+    async def test_category_none_no_post_filter(
+        self, tool: BaseTool, searcher: HybridSearcher
+    ) -> None:
+        await tool.ainvoke({"query": "일반 질의"})
+
+        call_kwargs = searcher.os_client.search.call_args[1]
+        assert "post_filter" not in call_kwargs["body"]

@@ -18,7 +18,10 @@ class HybridSearcher:
         self.index_name = index_name
 
     async def search(
-        self, query: str, top_k: int = 5
+        self,
+        query: str,
+        top_k: int = 5,
+        category: str | None = None,
     ) -> list[dict[str, Any]]:
         """하이브리드 검색을 수행하고 상위 결과를 반환한다."""
         query_vector = await asyncio.to_thread(
@@ -43,6 +46,11 @@ class HybridSearcher:
                 }
             },
         }
+
+        if category is not None:
+            body["post_filter"] = {
+                "term": {"metadata.category": category}
+            }
 
         response = await self.os_client.search(
             index=self.index_name, body=body
