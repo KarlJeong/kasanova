@@ -6,6 +6,8 @@ from app.rag.searcher import HybridSearcher
 
 logger = logging.getLogger(__name__)
 
+_MIN_SCORE = 0.2
+
 
 def create_retrieval_tool(searcher: HybridSearcher) -> BaseTool:
     """HybridSearcher를 바인딩한 LangGraph Tool을 생성한다."""
@@ -39,8 +41,21 @@ def create_retrieval_tool(searcher: HybridSearcher) -> BaseTool:
                 preview,
             )
 
+        filtered = [
+            r for r in results if r["score"] >= _MIN_SCORE
+        ]
+        logger.info(
+            "[retrieval_tool] %d/%d건 (score >= %.1f)",
+            len(filtered),
+            len(results),
+            _MIN_SCORE,
+        )
+
+        if not filtered:
+            return "검색 결과가 없습니다."
+
         parts: list[str] = []
-        for i, doc in enumerate(results, 1):
+        for i, doc in enumerate(filtered, 1):
             parts.append(
                 f"[{i}] (score: {doc['score']}) "
                 f"[{doc['source']}] {doc['content']}"
