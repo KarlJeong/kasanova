@@ -1,23 +1,15 @@
 import hashlib
 import hmac
-import re
+import logging
 import time
 from typing import Any
 
+from slack_sdk.errors import SlackApiError
 from slack_sdk.web.async_client import AsyncWebClient
 
 from app.core.config import settings
 
-
-def md_to_slack(text: str) -> str:
-    """Markdown → Slack mrkdwn 변환."""
-    # **bold** → *bold*  (코드블록 내부는 제외)
-    text = re.sub(r"\*\*(.+?)\*\*", r"*\1*", text)
-    # ## heading → *heading*
-    text = re.sub(r"^#{1,6}\s+(.+)$", r"*\1*", text, flags=re.MULTILINE)
-    # --- 수평선 제거
-    text = re.sub(r"^-{3,}$", "", text, flags=re.MULTILINE)
-    return text
+logger = logging.getLogger(__name__)
 
 
 def verify_signature(
@@ -61,12 +53,24 @@ class SlackService:
     async def update_message(
         self, channel: str, ts: str, text: str
     ) -> dict[str, Any]:
-        response = await self.client.chat_update(
-            channel=channel,
-            ts=ts,
-            text=md_to_slack(text),
-        )
-        return response.data
+        try:
+            response = await self.client.chat_update(
+                channel=channel,
+                ts=ts,
+                text=text,
+                blocks=[{"type": "markdown", "text": text}],
+            )
+            return response.data
+        except SlackApiError:
+            logger.warning(
+                "markdown 블록 전송 실패, plain text로 재시도"
+            )
+            response = await self.client.chat_update(
+                channel=channel,
+                ts=ts,
+                text=text,
+            )
+            return response.data
 
     async def send_message(
         self,
@@ -76,9 +80,22 @@ class SlackService:
     ) -> dict[str, Any]:
         kwargs: dict[str, Any] = {
             "channel": channel,
-            "text": md_to_slack(text),
+            "text": text,
+            "blocks": [{"type": "markdown", "text": text}],
         }
         if thread_ts is not None:
             kwargs["thread_ts"] = thread_ts
-        response = await self.client.chat_postMessage(**kwargs)
-        return response.data
+        try:
+            response = await self.client.chat_postMessage(
+                **kwargs
+            )
+            return response.data
+        except SlackApiError:
+            logger.warning(
+                "markdown 블록 전송 실패, plain text로 재시도"
+            )
+            kwargs.pop("blocks")
+            response = await self.client.chat_postMessage(
+                **kwargs
+            )
+            return response.data
