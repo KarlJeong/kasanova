@@ -12,7 +12,7 @@ class Settings(BaseSettings):
     slack_bot_token: str = ""
     slack_signing_secret: str = ""
     opensearch_url: str = "http://localhost:9200"
-    opensearch_index: str = "kasanova-docs"
+    opensearch_index: str = "kasanova_docs"
     llm_provider: str = "ollama"
     llm_server_url: str = "http://localhost:11434"
     llm_model_name: str = "phi3"
