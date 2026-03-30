@@ -8,6 +8,7 @@ from langchain_core.messages import (
     BaseMessage,
     HumanMessage,
     SystemMessage,
+    ToolMessage,
 )
 
 from app.core.config import get_settings
@@ -92,6 +93,10 @@ async def _maybe_summarize(
     """토큰 임계치 초과 시 오래된 메시지를 요약한다."""
     messages = state["messages"]
     existing_summary = state.get("summary") or ""
+
+    # 도구 호출 사이클 중에는 요약 스킵
+    if messages and isinstance(messages[-1], ToolMessage):
+        return existing_summary, messages
 
     total_tokens = _estimate_messages_tokens(messages)
     if total_tokens <= _SUMMARY_TRIGGER_TOKENS:
