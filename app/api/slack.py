@@ -1,8 +1,9 @@
 import logging
+import re
 from typing import Any
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -19,6 +20,57 @@ from app.services.slack_service import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+_RAG_SOURCE_RE = re.compile(
+    r"\[(\d+)\] \(score: ([\d.]+)\) \[(.+?)\]"
+)
+
+
+def _extract_references(
+    messages: list[Any],
+) -> str:
+    """ToolMessage에서 참고 자료 출처를 추출한다."""
+    rag_sources: list[tuple[str, str]] = []
+    web_urls: list[tuple[str, str]] = []
+
+    for msg in messages:
+        if not isinstance(msg, ToolMessage):
+            continue
+
+        content = (
+            msg.content
+            if isinstance(msg.content, str)
+            else str(msg.content)
+        )
+
+        if msg.name == "retrieval_tool":
+            for m in _RAG_SOURCE_RE.finditer(content):
+                filename = m.group(3)
+                score = m.group(2)
+                if (filename, score) not in rag_sources:
+                    rag_sources.append((filename, score))
+
+        elif msg.name == "web_search":
+            try:
+                import ast
+                data = ast.literal_eval(content)
+                for r in data.get("results", []):
+                    title = r.get("title", "")
+                    url = r.get("url", "")
+                    if url and (title, url) not in web_urls:
+                        web_urls.append((title, url))
+            except Exception:
+                pass
+
+    if not rag_sources and not web_urls:
+        return ""
+
+    parts: list[str] = ["\n\n---\n**참고 자료**"]
+    for filename, score in rag_sources:
+        parts.append(f"- 📎 {filename} (score: {score})")
+    for title, url in web_urls:
+        parts.append(f"- 🔗 [{title}]({url})")
+    return "\n".join(parts)
 
 
 @router.post("/slack/events")
@@ -151,6 +203,9 @@ async def handle_message_event(
             answer: str = (
                 answer_message.content
                 or "응답을 생성하지 못했습니다."
+            )
+            answer += _extract_references(
+                result["messages"]
             )
 
             await query_service.update_status(
