@@ -9,8 +9,8 @@ class Chunk:
 
 
 def _count_tokens(text: str) -> int:
-    """공백 기반 단어 수로 토큰 수를 근사한다."""
-    return len(text.split())
+    """문자 수 기반으로 토큰 수를 근사한다 (1토큰 ≈ 3자)."""
+    return max(1, len(text) // 3)
 
 
 def _split_by_paragraphs(text: str) -> list[str]:
