@@ -24,10 +24,13 @@ def build_workflow(
     retrieval_tool = create_retrieval_tool(searcher)
     tools = [web_search, retrieval_tool]
     llm_with_tools = llm.bind_tools(tools)
+    llm_base = llm
     tool_node = ToolNode(tools)
 
     async def _call_llm(state: KasaNovaState) -> dict:
-        return await call_llm(state, llm_with_tools)
+        return await call_llm(
+            state, llm_with_tools, llm_base
+        )
 
     async def _tool_node(state: KasaNovaState) -> dict:
         logger.info("[ToolNode] 도구 실행 시작")

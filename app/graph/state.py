@@ -7,3 +7,4 @@ from typing_extensions import TypedDict
 
 class KasaNovaState(TypedDict):
     messages: Annotated[list[BaseMessage], add_messages]
+    summary: str
