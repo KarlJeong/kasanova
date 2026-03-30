@@ -33,11 +33,12 @@ def create_retrieval_tool(searcher: HybridSearcher) -> BaseTool:
             )
             logger.info(
                 "[retrieval_tool] [%d/%d] score=%.4f"
-                " len=%d '%s...'",
+                " len=%d [%s] '%s...'",
                 i,
                 len(results),
                 doc["score"],
                 len(doc["content"]),
+                doc["source"],
                 preview,
             )
 
