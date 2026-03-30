@@ -54,4 +54,7 @@ def build_workflow(
     builder.add_conditional_edges("call_llm", tools_condition)
     builder.add_edge("tools", "call_llm")
 
-    return builder.compile(checkpointer=checkpointer)
+    return builder.compile(
+        checkpointer=checkpointer,
+        recursion_limit=15,
+    )

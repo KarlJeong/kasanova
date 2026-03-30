@@ -46,6 +46,9 @@ _SYSTEM_PROMPT_TEMPLATE = (
     "- Choose the most appropriate tool for the task.\n"
     "- Do not call multiple tools unless absolutely"
     " necessary.\n"
+    "- Do not call the same tool repeatedly with"
+    " similar queries. Use the results from the first"
+    " 1-2 calls to compose your answer.\n"
     "- If no tool is needed, respond normally in Korean.\n\n"
     "## Tool Execution Handling\n"
     "- If a tool fails or returns no useful result,"
@@ -204,14 +207,37 @@ async def call_llm(
         )
     ] + recent_messages
 
+    # 프롬프트 크기 로깅
+    total_chars = sum(
+        len(m.content) if isinstance(m.content, str)
+        else len(str(m.content))
+        for m in messages
+    )
+    total_tokens_est = _estimate_messages_tokens(messages)
+    tool_msg_info = ""
+    for m in messages:
+        if isinstance(m, ToolMessage):
+            content = (
+                m.content
+                if isinstance(m.content, str)
+                else str(m.content)
+            )
+            tool_msg_info += (
+                f", {m.name}={len(content)}자"
+            )
+
     logger.info(
         "[LLM] 호출 시작 (%s/%s, 메시지 %d개,"
-        " 전체 %d개, 요약 %s)",
+        " 전체 %d개, 요약 %s,"
+        " 프롬프트 %d자/~%d토큰%s)",
         _settings.llm_provider,
         _settings.llm_model_name,
         len(messages),
         len(state["messages"]) + 1,
         "있음" if summary else "없음",
+        total_chars,
+        total_tokens_est,
+        tool_msg_info,
     )
     response: AIMessage = await llm_with_tools.ainvoke(
         messages
