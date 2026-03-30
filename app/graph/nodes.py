@@ -113,7 +113,11 @@ async def _maybe_summarize(
             else str(msg.content)
         )
         msg_tokens = _estimate_tokens(content) + 4
-        if recent_tokens + msg_tokens > _RECENT_MESSAGES_BUDGET:
+        if (
+            recent_tokens + msg_tokens
+            > _RECENT_MESSAGES_BUDGET
+            and recent
+        ):
             break
         recent.insert(0, msg)
         recent_tokens += msg_tokens
@@ -121,6 +125,10 @@ async def _maybe_summarize(
     # HumanMessage로 시작하도록 조정
     while recent and not isinstance(recent[0], HumanMessage):
         recent.pop(0)
+
+    # 최소 1개 메시지는 유지
+    if not recent:
+        recent = messages[-1:]
 
     num_to_summarize = len(messages) - len(recent)
     if num_to_summarize <= 0:
@@ -161,7 +169,7 @@ async def _maybe_summarize(
     )
 
     response = await llm_base.ainvoke(
-        [SystemMessage(content="\n".join(parts))]
+        [HumanMessage(content="\n".join(parts))]
     )
     new_summary = (
         response.content
