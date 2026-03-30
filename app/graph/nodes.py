@@ -192,6 +192,41 @@ async def _maybe_summarize(
     return new_summary, recent
 
 
+_TOOL_MSG_PLACEHOLDER = "(이전 도구 호출 결과 - 답변에 반영됨)"
+
+
+def _compact_old_tool_messages(
+    messages: list[BaseMessage],
+) -> list[BaseMessage]:
+    """답변 완료된 이전 ToolMessage를 플레이스홀더로 대체."""
+    # 현재 진행 중인 도구 호출의 tool_call_id 수집
+    # (마지막 AIMessage가 tool_calls를 가진 경우)
+    active_tool_ids: set[str] = set()
+    for msg in reversed(messages):
+        if isinstance(msg, AIMessage):
+            if msg.tool_calls:
+                for tc in msg.tool_calls:
+                    active_tool_ids.add(tc["id"])
+            break
+
+    result: list[BaseMessage] = []
+    for msg in messages:
+        if (
+            isinstance(msg, ToolMessage)
+            and msg.tool_call_id not in active_tool_ids
+        ):
+            result.append(
+                ToolMessage(
+                    content=_TOOL_MSG_PLACEHOLDER,
+                    tool_call_id=msg.tool_call_id,
+                    name=msg.name,
+                )
+            )
+        else:
+            result.append(msg)
+    return result
+
+
 async def call_llm(
     state: KasaNovaState,
     llm_with_tools: BaseChatModel,
@@ -206,6 +241,9 @@ async def call_llm(
             content=_build_system_prompt(summary)
         )
     ] + recent_messages
+
+    # 이전 턴의 ToolMessage를 플레이스홀더로 대체
+    messages = _compact_old_tool_messages(messages)
 
     # 프롬프트 크기 로깅
     total_chars = sum(
