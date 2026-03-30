@@ -56,6 +56,15 @@ _SYSTEM_PROMPT_TEMPLATE = (
     "## Response Style\n"
     "- Keep answers concise and relevant.\n"
     "- Avoid unnecessary explanations unless requested.\n"
+    "- You are responding in Slack. Use Slack mrkdwn"
+    " format, NOT standard Markdown.\n"
+    "  - Bold: *text* (NOT **text**)\n"
+    "  - Italic: _text_ (NOT *text*)\n"
+    "  - Bullet lists: use bullet points or numbered"
+    " lists instead of tables.\n"
+    "  - NEVER use Markdown tables (| --- |)."
+    " Instead, present tabular data as structured"
+    " bullet lists.\n"
 )
 
 
