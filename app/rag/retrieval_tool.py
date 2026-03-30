@@ -13,7 +13,7 @@ def create_retrieval_tool(searcher: HybridSearcher) -> BaseTool:
         knowledge, policies, or documents.
         Do NOT use for general web information or real-time news."""
         try:
-            results = await searcher.search(query, top_k=10)
+            results = await searcher.search(query, top_k=5)
         except Exception as e:
             return f"사내 문서 검색 중 오류가 발생했습니다: {e}"
 
