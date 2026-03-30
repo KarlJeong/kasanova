@@ -9,6 +9,7 @@ from langgraph.prebuilt import ToolNode, tools_condition
 from app.graph.nodes import call_llm, retrieve
 from app.graph.state import KasaNovaState
 from app.graph.tools import web_search
+from app.rag.retrieval_tool import create_retrieval_tool
 from app.rag.searcher import HybridSearcher
 
 logger = logging.getLogger(__name__)
@@ -19,7 +20,8 @@ def build_workflow(
     llm: BaseChatModel,
     searcher: HybridSearcher,
 ) -> StateGraph:
-    tools = [web_search]
+    retrieval_tool = create_retrieval_tool(searcher)
+    tools = [web_search, retrieval_tool]
     llm_with_tools = llm.bind_tools(tools)
     tool_node = ToolNode(tools)
 
