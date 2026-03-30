@@ -30,6 +30,7 @@ def _extract_references(
     messages: list[Any],
 ) -> str:
     """ToolMessage에서 참고 자료 출처를 추출한다."""
+    seen_files: set[str] = set()
     rag_sources: list[tuple[str, str]] = []
     web_urls: list[tuple[str, str]] = []
 
@@ -47,7 +48,8 @@ def _extract_references(
             for m in _RAG_SOURCE_RE.finditer(content):
                 filename = m.group(3)
                 score = m.group(2)
-                if (filename, score) not in rag_sources:
+                if filename not in seen_files:
+                    seen_files.add(filename)
                     rag_sources.append((filename, score))
 
         elif msg.name == "web_search":

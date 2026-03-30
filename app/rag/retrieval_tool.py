@@ -6,7 +6,7 @@ from app.rag.searcher import HybridSearcher
 
 logger = logging.getLogger(__name__)
 
-_MIN_SCORE = 0.2
+_MIN_SCORE = 0.45
 
 
 def create_retrieval_tool(searcher: HybridSearcher) -> BaseTool:
