@@ -79,17 +79,57 @@ def _print_ragas_report(
             print(f"    {k:20s} {v:.4f}")
 
 
+def _create_clients(
+    provider: str, api_key: str
+) -> tuple[Any, Any, Any]:
+    """provider에 따라 qa_client, llm, judge_llm을 생성한다."""
+    if provider == "claude":
+        import anthropic
+        from langchain_anthropic import ChatAnthropic
+
+        qa_client = anthropic.Anthropic(api_key=api_key)
+        llm = ChatAnthropic(
+            model="claude-sonnet-4-20250514",
+            api_key=api_key,
+        )
+        judge_llm = ChatAnthropic(
+            model="claude-sonnet-4-20250514",
+            api_key=api_key,
+        )
+    else:
+        import google.generativeai as genai
+        from langchain_google_genai import (
+            ChatGoogleGenerativeAI,
+        )
+
+        genai.configure(api_key=api_key)
+        qa_client = genai.GenerativeModel(
+            "gemini-2.0-flash"
+        )
+        llm = ChatGoogleGenerativeAI(
+            model="gemini-2.0-flash",
+            google_api_key=api_key,
+        )
+        judge_llm = ChatGoogleGenerativeAI(
+            model="gemini-2.0-flash",
+            google_api_key=api_key,
+        )
+
+    return qa_client, llm, judge_llm
+
+
 async def _run(args: argparse.Namespace) -> None:
     """평가 실행 메인 로직."""
-    import anthropic
-    from langchain_anthropic import ChatAnthropic
     from opensearchpy import AsyncOpenSearch
 
     from app.core.config import settings
     from app.rag.embedder import Embedder
     from app.rag.searcher import HybridSearcher
 
-    anthropic_key = args.api_key
+    provider = args.provider
+    qa_client, llm, judge_llm = _create_clients(
+        provider, args.api_key
+    )
 
     os_client = AsyncOpenSearch(
         hosts=[settings.opensearch_url],
@@ -109,14 +149,12 @@ async def _run(args: argparse.Namespace) -> None:
                 generate_dataset,
             )
 
-            anthropic_client = anthropic.Anthropic(
-                api_key=anthropic_key
-            )
             dataset = await generate_dataset(
                 os_client,
-                anthropic_client,
+                qa_client,
                 _DATASET_PATH,
                 regenerate=args.regenerate,
+                provider=provider,
             )
         else:
             if not _DATASET_PATH.exists():
@@ -135,6 +173,7 @@ async def _run(args: argparse.Namespace) -> None:
         results: dict[str, Any] = {
             "run_at": datetime.now().isoformat(),
             "dataset_size": len(dataset),
+            "provider": provider,
         }
 
         # 2. Classic IR 평가
@@ -158,14 +197,6 @@ async def _run(args: argparse.Namespace) -> None:
             )
 
             logger.info("RAGAS 평가 시작")
-            llm = ChatAnthropic(
-                model="claude-sonnet-4-20250514",
-                api_key=anthropic_key,
-            )
-            judge_llm = ChatAnthropic(
-                model="claude-sonnet-4-20250514",
-                api_key=anthropic_key,
-            )
             kure_embeddings = KureEmbeddings()
 
             ragas_results = await evaluate_pipeline(
@@ -221,10 +252,17 @@ def main() -> None:
         help="평가셋 강제 재생성",
     )
     parser.add_argument(
+        "--provider",
+        type=str,
+        choices=["claude", "gemini"],
+        default="claude",
+        help="LLM 프로바이더 선택 (기본: claude)",
+    )
+    parser.add_argument(
         "--api-key",
         type=str,
         required=True,
-        help="Anthropic API Key",
+        help="LLM API Key (Claude 또는 Gemini)",
     )
     args = parser.parse_args()
 

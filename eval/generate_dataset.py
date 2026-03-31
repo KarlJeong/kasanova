@@ -1,4 +1,4 @@
-"""평가셋 자동 생성 — OpenSearch 청크 샘플링 + Claude Q&A 생성."""
+"""평가셋 자동 생성 — OpenSearch 청크 샘플링 + LLM Q&A 생성."""
 
 import json
 import logging
@@ -6,11 +6,10 @@ import os
 from pathlib import Path
 from typing import Any
 
-import anthropic
-
 logger = logging.getLogger(__name__)
 
-_MODEL = "claude-sonnet-4-20250514"
+_CLAUDE_MODEL = "claude-sonnet-4-20250514"
+_GEMINI_MODEL = "gemini-2.0-flash"
 
 _QA_PROMPT = """아래 사내 문서 청크를 읽고, 이 내용을 기반으로 직원이 물어볼 법한 \
 질문 1개와 그에 대한 정확한 답변 1개를 생성하세요.
@@ -58,24 +57,28 @@ async def sample_chunks_from_opensearch(
 
 
 def generate_qa_pair(
-    client: anthropic.Anthropic,
+    client: Any,
     chunk: dict[str, Any],
+    provider: str = "claude",
 ) -> dict[str, str]:
-    """Claude Sonnet으로 청크에서 Q&A 쌍을 생성한다."""
-    response = client.messages.create(
-        model=_MODEL,
-        max_tokens=1024,
-        messages=[
-            {
-                "role": "user",
-                "content": _QA_PROMPT.format(
-                    content=chunk["content"]
-                ),
-            }
-        ],
+    """Claude 또는 Gemini로 청크에서 Q&A 쌍을 생성한다."""
+    prompt_text = _QA_PROMPT.format(
+        content=chunk["content"]
     )
 
-    raw = response.content[0].text.strip()
+    if provider == "claude":
+        response = client.messages.create(
+            model=_CLAUDE_MODEL,
+            max_tokens=1024,
+            messages=[
+                {"role": "user", "content": prompt_text}
+            ],
+        )
+        raw = response.content[0].text.strip()
+    else:
+        response = client.generate_content(prompt_text)
+        raw = response.text.strip()
+
     # 마크다운 코드블록 제거
     if raw.startswith("```"):
         raw = raw.split("\n", 1)[1]
@@ -90,10 +93,11 @@ def generate_qa_pair(
 
 async def generate_dataset(
     os_client: Any,
-    anthropic_client: anthropic.Anthropic,
+    qa_client: Any,
     output_path: Path,
     n_per_category: int = 20,
     regenerate: bool = False,
+    provider: str = "claude",
 ) -> list[dict[str, Any]]:
     """평가셋을 생성하고 JSON 파일에 저장한다."""
     if output_path.exists() and not regenerate:
@@ -120,7 +124,7 @@ async def generate_dataset(
 
         for chunk in chunks:
             qa = generate_qa_pair(
-                anthropic_client, chunk
+                qa_client, chunk, provider
             )
             dataset.append(
                 {
