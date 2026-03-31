@@ -4,7 +4,6 @@ import argparse
 import asyncio
 import json
 import logging
-import os
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -90,12 +89,7 @@ async def _run(args: argparse.Namespace) -> None:
     from app.rag.embedder import Embedder
     from app.rag.searcher import HybridSearcher
 
-    anthropic_key = os.environ.get("ANTHROPIC_API_KEY", "")
-    if not anthropic_key:
-        logger.error(
-            "ANTHROPIC_API_KEY 환경변수가 설정되지 않았습니다."
-        )
-        sys.exit(1)
+    anthropic_key = args.api_key
 
     os_client = AsyncOpenSearch(
         hosts=[settings.opensearch_url],
@@ -225,6 +219,12 @@ def main() -> None:
         "--regenerate",
         action="store_true",
         help="평가셋 강제 재생성",
+    )
+    parser.add_argument(
+        "--api-key",
+        type=str,
+        required=True,
+        help="Anthropic API Key",
     )
     args = parser.parse_args()
 

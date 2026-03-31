@@ -4,6 +4,8 @@ curl -X POST http://localhost:8000/index/documents -F "file=@/Users/karl-jeong/k
 curl -X POST http://localhost:8000/index/documents -F "file=@/Users/karl-jeong/kasa/kasanova/RAG/hr/카사코리아_KASA_징계규정_4차개정_20230525.pdf" -F "category=hr"
 curl -X POST http://localhost:8000/index/documents -F "file=@/Users/karl-jeong/kasa/kasanova/RAG/hr/카사코리아_임직원_ DABS_매매_지침(수정안).pdf" -F "category=hr"
 curl -X POST http://localhost:8000/index/documents -F "file=@/Users/karl-jeong/kasa/kasanova/RAG/hr/Kasa corp. Information.pdf" -F "category=hr"
+curl -X POST http://localhost:8000/index/documents -F "file=@/Users/karl-jeong/kasa/kasanova/RAG/hr/02030-B 직제규정.docx" -F "category=hr"
+curl -X POST http://localhost:8000/index/documents -F "file=@/Users/karl-jeong/kasa/kasanova/RAG/hr/카사코리아_수탁자산관리구매규정_230525.pdf" -F "category=hr"
 
 
 curl -X POST http://localhost:8000/index/documents -F "file=@/Users/karl-jeong/kasa/kasanova/RAG/ops/9. (전자증권_운영정책) 수익자총회.pptx" -F "category=ops"
@@ -23,3 +25,13 @@ curl -X POST http://localhost:8000/index/documents -F "file=@/Users/karl-jeong/k
 curl -X POST http://localhost:8000/index/documents -F "file=@/Users/karl-jeong/kasa/kasanova/RAG/ops/2_1. (공통_규정) 공시운영규정_시행세칙.pptx" -F "category=ops"
 curl -X POST http://localhost:8000/index/documents -F "file=@/Users/karl-jeong/kasa/kasanova/RAG/ops/2. (공통_규정) 공시운영규정.pptx" -F "category=ops"
 curl -X POST http://localhost:8000/index/documents -F "file=@/Users/karl-jeong/kasa/kasanova/RAG/ops/3. (공통_규정) 상장규정.pptx" -F "category=ops"
+
+
+
+curl -X POST http://localhost:8000/index/documents -F "file=@/Users/karl-jeong/kasa/kasanova/RAG/benefit/휴일 및 휴가.pdf" -F "category=benefit"
+curl -X POST http://localhost:8000/index/documents -F "file=@/Users/karl-jeong/kasa/kasanova/RAG/benefit/복지제도.docx" -F "category=benefit"
+curl -X POST http://localhost:8000/index/documents -F "file=@/Users/karl-jeong/kasa/kasanova/RAG/benefit/업무용 장비 가이드라인.docx" -F "category=benefit"
+curl -X POST http://localhost:8000/index/documents -F "file=@/Users/karl-jeong/kasa/kasanova/RAG/benefit/임직원 건강검진 지원제도.docx" -F "category=benefit"
+curl -X POST http://localhost:8000/index/documents -F "file=@/Users/karl-jeong/kasa/kasanova/RAG/benefit/임직원 리조트.pdf" -F "category=benefit"
+curl -X POST http://localhost:8000/index/documents -F "file=@/Users/karl-jeong/kasa/kasanova/RAG/benefit/카레업 (업무 유관 교육 지원 방법).docx" -F "category=benefit"
+curl -X POST http://localhost:8000/index/documents -F "file=@/Users/karl-jeong/kasa/kasanova/RAG/benefit/카사코리아 퇴직연금규약.pdf" -F "category=benefit"

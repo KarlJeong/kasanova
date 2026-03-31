@@ -94,7 +94,7 @@ async def evaluate_retrieval(
 
     # 카테고리별 결과 수집
     scores: dict[str, list[dict[str, float]]] = {}
-    for cat in {"hr", "ops"}:
+    for cat in {"hr", "ops", "benefit"}:
         scores[cat] = []
 
     for item in dataset:
@@ -103,7 +103,13 @@ async def evaluate_retrieval(
             top_k=max_k,
             category=item["category"],
         )
-        retrieved_ids = [r["doc_id"] for r in results]
+        retrieved_ids_raw = [r["doc_id"] for r in results]
+        seen: set[str] = set()
+        retrieved_ids: list[str] = []
+        for did in retrieved_ids_raw:
+            if did not in seen:
+                seen.add(did)
+                retrieved_ids.append(did)
         gt_ids = item["ground_truth_doc_ids"]
 
         item_scores: dict[str, float] = {}

@@ -75,7 +75,11 @@ def generate_qa_pair(
         ],
     )
 
-    raw = response.content[0].text
+    raw = response.content[0].text.strip()
+    # 마크다운 코드블록 제거
+    if raw.startswith("```"):
+        raw = raw.split("\n", 1)[1]
+        raw = raw.rsplit("```", 1)[0].strip()
     parsed = json.loads(raw)
 
     return {
@@ -98,7 +102,7 @@ async def generate_dataset(
         )
         return json.loads(output_path.read_text())
 
-    categories = ["hr", "ops"]
+    categories = ["hr", "ops", "benefit"]
     dataset: list[dict[str, Any]] = []
 
     for category in categories:
