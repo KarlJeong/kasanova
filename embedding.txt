@@ -18,3 +18,8 @@ curl -X POST http://localhost:8000/index/documents -F 'file=@"/Users/karl-jeong/
 curl -X POST http://localhost:8000/index/documents -F "file=@/Users/karl-jeong/kasa/kasanova/RAG/ops/6. (전자증권_운영정책) 법인회원.pptx" -F "category=ops"
 curl -X POST http://localhost:8000/index/documents -F "file=@/Users/karl-jeong/kasa/kasanova/RAG/ops/7. (전자증권_운영정책) 휴면회원.pptx" -F "category=ops"
 curl -X POST http://localhost:8000/index/documents -F "file=@/Users/karl-jeong/kasa/kasanova/RAG/ops/8. (전자증권_운영정책) 세금.pptx" -F "category=ops"
+curl -X POST http://localhost:8000/index/documents -F "file=@/Users/karl-jeong/kasa/kasanova/RAG/ops/1_1. (공통_규정) 시장감시규정_시행세칙.pptx" -F "category=ops"
+curl -X POST http://localhost:8000/index/documents -F "file=@/Users/karl-jeong/kasa/kasanova/RAG/ops/1. (공통_규정) 시장감시 규정.pptx" -F "category=ops"
+curl -X POST http://localhost:8000/index/documents -F "file=@/Users/karl-jeong/kasa/kasanova/RAG/ops/2_1. (공통_규정) 공시운영규정_시행세칙.pptx" -F "category=ops"
+curl -X POST http://localhost:8000/index/documents -F "file=@/Users/karl-jeong/kasa/kasanova/RAG/ops/2. (공통_규정) 공시운영규정.pptx" -F "category=ops"
+curl -X POST http://localhost:8000/index/documents -F "file=@/Users/karl-jeong/kasa/kasanova/RAG/ops/3. (공통_규정) 상장규정.pptx" -F "category=ops"
