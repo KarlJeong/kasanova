@@ -30,8 +30,8 @@ def create_retrieval_tool(searcher: HybridSearcher) -> BaseTool:
 
         category option (only specify when clearly applicable,
         use None when uncertain):
-        - "hr": 인사, 연차, 복리후생, 채용, 사내 규정, 임직원 매매 관련
-        - "ops": 서비스 운영, 운영 지침, 프로덕트 운영 관련
+        - "hr": 인사, 연차, 복리후생, 채용, 사내 규정, 임직원 규정, 임직원 매매 관련
+        - "ops": 서비스 운영, 운영 지침, 운영 규정, 프로덕트 운영 관련
         - None: 카테고리 불명확 시 전체 검색
         """
         cat_value = category.value if category else None
@@ -43,7 +43,7 @@ def create_retrieval_tool(searcher: HybridSearcher) -> BaseTool:
         try:
             results = await searcher.search(
                 query,
-                top_k=5,
+                top_k=10,
                 category=cat_value,
             )
         except Exception as e:
