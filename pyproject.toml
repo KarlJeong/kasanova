@@ -37,6 +37,7 @@ httpx = "^0.28"
 ragas = "^0.2"
 anthropic = "^0.52"
 langchain-google-genai = "^2.1"
+ranx = "^0.3"
 
 [build-system]
 requires = ["poetry-core"]

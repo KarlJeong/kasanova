@@ -1,116 +1,16 @@
-import math
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from tests.eval.conftest import _make_mock_embedder
 
-
-class TestHitRate:
-    def test_hit_in_top_k(self) -> None:
-        from eval.evaluate_retrieval import hit_rate
-
-        assert hit_rate(["doc_A"], ["doc_A", "doc_B"], k=1) == 1.0
-
-    def test_miss_in_top_k(self) -> None:
-        from eval.evaluate_retrieval import hit_rate
-
-        assert hit_rate(["doc_A"], ["doc_B", "doc_C"], k=2) == 0.0
-
-    def test_hit_at_boundary(self) -> None:
-        from eval.evaluate_retrieval import hit_rate
-
-        assert (
-            hit_rate(
-                ["doc_A"], ["doc_B", "doc_C", "doc_A"], k=3
-            )
-            == 1.0
-        )
-
-    def test_hit_beyond_k(self) -> None:
-        from eval.evaluate_retrieval import hit_rate
-
-        assert (
-            hit_rate(
-                ["doc_A"], ["doc_B", "doc_C", "doc_A"], k=2
-            )
-            == 0.0
-        )
-
-
-class TestMRR:
-    def test_first_position(self) -> None:
-        from eval.evaluate_retrieval import mrr
-
-        assert mrr(["doc_A"], ["doc_A", "doc_B"], k=5) == 1.0
-
-    def test_third_position(self) -> None:
-        from eval.evaluate_retrieval import mrr
-
-        result = mrr(
-            ["doc_A"],
-            ["doc_B", "doc_C", "doc_A"],
-            k=5,
-        )
-        assert result == pytest.approx(1 / 3)
-
-    def test_not_found(self) -> None:
-        from eval.evaluate_retrieval import mrr
-
-        assert mrr(["doc_A"], ["doc_B", "doc_C"], k=5) == 0.0
-
-
-class TestPrecisionAtK:
-    def test_one_relevant_in_three(self) -> None:
-        from eval.evaluate_retrieval import precision_at_k
-
-        result = precision_at_k(
-            ["doc_A"], ["doc_A", "doc_B", "doc_C"], k=3
-        )
-        assert result == pytest.approx(1 / 3)
-
-    def test_all_relevant(self) -> None:
-        from eval.evaluate_retrieval import precision_at_k
-
-        result = precision_at_k(
-            ["doc_A", "doc_B"], ["doc_A", "doc_B"], k=2
-        )
-        assert result == 1.0
-
-    def test_none_relevant(self) -> None:
-        from eval.evaluate_retrieval import precision_at_k
-
-        result = precision_at_k(
-            ["doc_A"], ["doc_B", "doc_C"], k=2
-        )
-        assert result == 0.0
-
-
-class TestNDCGAtK:
-    def test_relevant_at_position_0(self) -> None:
-        from eval.evaluate_retrieval import ndcg_at_k
-
-        result = ndcg_at_k(
-            ["doc_A"], ["doc_A", "doc_B"], k=2
-        )
-        assert result == pytest.approx(1.0)
-
-    def test_relevant_at_position_1(self) -> None:
-        from eval.evaluate_retrieval import ndcg_at_k
-
-        result = ndcg_at_k(
-            ["doc_A"], ["doc_B", "doc_A"], k=2
-        )
-        expected = (1 / math.log2(3)) / 1.0
-        assert result == pytest.approx(expected)
-
-    def test_not_found(self) -> None:
-        from eval.evaluate_retrieval import ndcg_at_k
-
-        result = ndcg_at_k(
-            ["doc_A"], ["doc_B", "doc_C"], k=2
-        )
-        assert result == 0.0
+_ALL_METRICS = [
+    "precision",
+    "recall",
+    "map",
+    "mrr",
+    "ndcg",
+]
 
 
 class TestEvaluateRetrieval:
@@ -183,10 +83,55 @@ class TestEvaluateRetrieval:
         )
 
         for k in [1, 3, 5, 10]:
-            assert f"hit_rate@{k}" in result["overall"]
-            assert f"mrr@{k}" in result["overall"]
-            assert f"precision@{k}" in result["overall"]
-            assert f"ndcg@{k}" in result["overall"]
+            for m in _ALL_METRICS:
+                assert (
+                    f"{m}@{k}" in result["overall"]
+                ), f"{m}@{k} missing from overall"
+
+    async def test_perfect_retrieval(
+        self, sample_dataset: list[dict],
+    ) -> None:
+        from eval.evaluate_retrieval import (
+            evaluate_retrieval,
+        )
+
+        results_map = {
+            q["question"]: [
+                {
+                    "doc_id": q["ground_truth_doc_ids"][0],
+                    "score": 1.0,
+                }
+            ]
+            for q in sample_dataset
+        }
+        searcher = self._make_searcher(results_map)
+
+        result = await evaluate_retrieval(
+            searcher, sample_dataset
+        )
+
+        assert result["overall"]["precision@1"] == pytest.approx(1.0)
+        assert result["overall"]["mrr@1"] == pytest.approx(1.0)
+        assert result["overall"]["ndcg@1"] == pytest.approx(1.0)
+
+    async def test_empty_results(
+        self, sample_dataset: list[dict],
+    ) -> None:
+        from eval.evaluate_retrieval import (
+            evaluate_retrieval,
+        )
+
+        searcher = self._make_searcher({})
+        searcher.search = AsyncMock(return_value=[])
+
+        result = await evaluate_retrieval(
+            searcher, sample_dataset
+        )
+
+        for m in _ALL_METRICS:
+            assert (
+                result["overall"][f"{m}@1"] == 0.0
+            ), f"{m}@1 should be 0.0"
 
     async def test_category_filter_applied(
         self, sample_dataset: list[dict],
