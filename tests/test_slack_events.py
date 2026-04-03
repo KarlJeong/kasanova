@@ -6,8 +6,14 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from httpx import AsyncClient
+from langchain_core.messages import AIMessageChunk
 
 from app.core.config import settings
+
+
+async def _make_stream_events(events):
+    for e in events:
+        yield e
 
 
 def _sign(body: str, timestamp: str, secret: str) -> str:
@@ -380,12 +386,19 @@ class TestHandleMessageEvent:
             }
             mock_slack_cls.return_value = mock_slack
 
-            mock_workflow = AsyncMock()
-            mock_workflow.ainvoke.return_value = {
-                "messages": [
-                    MagicMock(content="mocked answer")
-                ]
-            }
+            mock_workflow = MagicMock()
+            mock_workflow.astream_events = (
+                lambda *a, **kw: _make_stream_events([
+                    {
+                        "event": "on_chat_model_stream",
+                        "data": {
+                            "chunk": AIMessageChunk(
+                                content="mocked answer"
+                            )
+                        },
+                    },
+                ])
+            )
             await handle_message_event(
                 event=event, workflow=mock_workflow
             )
@@ -455,12 +468,19 @@ class TestHandleMessageEvent:
             }
             mock_slack_cls.return_value = mock_slack
 
-            mock_workflow = AsyncMock()
-            mock_workflow.ainvoke.return_value = {
-                "messages": [
-                    MagicMock(content="mocked answer")
-                ]
-            }
+            mock_workflow = MagicMock()
+            mock_workflow.astream_events = (
+                lambda *a, **kw: _make_stream_events([
+                    {
+                        "event": "on_chat_model_stream",
+                        "data": {
+                            "chunk": AIMessageChunk(
+                                content="mocked answer"
+                            )
+                        },
+                    },
+                ])
+            )
             await handle_message_event(
                 event=event, workflow=mock_workflow
             )

@@ -1,9 +1,10 @@
 import logging
 import re
+import time
 from typing import Any
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
-from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langchain_core.messages import HumanMessage, ToolMessage
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -135,6 +136,74 @@ async def slack_events(
     return {"ok": True}
 
 
+_TOOL_STATUS: dict[str, str] = {
+    "retrieval_tool": "🔍 내부 문서 검색 중...",
+    "web_search": "🌐 웹 검색 중...",
+}
+_UPDATE_INTERVAL = 3.0
+
+
+async def _stream_response(
+    workflow: Any,
+    input_messages: dict[str, Any],
+    config: dict[str, Any],
+    slack_service: SlackService,
+    channel: str,
+    loading_ts: str,
+) -> tuple[str, list[ToolMessage]]:
+    """LLM 스트림을 소비하며 Slack 메시지를 점진적으로 업데이트한다."""
+    buffer = ""
+    tool_messages: list[ToolMessage] = []
+    last_update = time.monotonic()
+
+    async for event in workflow.astream_events(
+        input_messages, config=config, version="v2"
+    ):
+        kind = event["event"]
+
+        if kind == "on_tool_start":
+            status_text = _TOOL_STATUS.get(event["name"])
+            if status_text:
+                await slack_service.update_message(
+                    channel=channel,
+                    ts=loading_ts,
+                    text=status_text,
+                )
+                last_update = time.monotonic()
+
+        elif kind == "on_tool_end":
+            if event["name"] in _TOOL_STATUS:
+                output = event["data"].get("output", "")
+                tool_messages.append(
+                    ToolMessage(
+                        content=str(output),
+                        tool_call_id="",
+                        name=event["name"],
+                    )
+                )
+
+        elif kind == "on_chat_model_stream":
+            chunk = event["data"]["chunk"]
+            token = (
+                chunk.content
+                if hasattr(chunk, "content")
+                else ""
+            )
+            if token:
+                buffer += token
+                now = time.monotonic()
+                if now - last_update >= _UPDATE_INTERVAL:
+                    await slack_service.update_message(
+                        channel=channel,
+                        ts=loading_ts,
+                        text=buffer + " ▌",
+                    )
+                    last_update = now
+
+    answer = buffer or "응답을 생성하지 못했습니다."
+    return answer, tool_messages
+
+
 async def handle_message_event(
     event: dict[str, Any], workflow: Any = None
 ) -> None:
@@ -204,18 +273,22 @@ async def handle_message_event(
                     "thread_id": str(slack_thread.id)
                 }
             }
-            result = await workflow.ainvoke(
-                {"messages": [HumanMessage(content=text)]},
+            answer, tool_msgs = await _stream_response(
+                workflow=workflow,
+                input_messages={
+                    "messages": [HumanMessage(content=text)]
+                },
                 config=config,
+                slack_service=slack_service,
+                channel=channel,
+                loading_ts=loading_ts,
             )
-            answer_message: AIMessage = result["messages"][-1]
-            answer: str = (
-                answer_message.content
-                or "응답을 생성하지 못했습니다."
-            )
-            answer += _extract_references(
-                result["messages"]
-            )
+
+            ref_messages: list[Any] = [
+                HumanMessage(content=""),
+                *tool_msgs,
+            ]
+            answer += _extract_references(ref_messages)
 
             await query_service.update_status(
                 user_query.id, QueryStatusEnum.completed,
@@ -232,8 +305,8 @@ async def handle_message_event(
             await slack_service.update_message(
                 channel=channel,
                 ts=loading_ts,
-                text="처리 중 오류가 발생했습니다."
-                " 잠시 후 다시 시도해주세요.",
+                text="❌ 오류가 발생했습니다."
+                " 다시 시도해 주세요.",
             )
 
 
