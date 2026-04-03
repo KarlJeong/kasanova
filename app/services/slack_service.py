@@ -43,7 +43,7 @@ class SlackService:
     ) -> dict[str, Any]:
         kwargs: dict[str, Any] = {
             "channel": channel,
-            "text": "답변을 준비 중입니다... :hourglass_flowing_sand:",
+            "text": "⏳ 답변 생성 중...",
         }
         if thread_ts is not None:
             kwargs["thread_ts"] = thread_ts
