@@ -79,6 +79,21 @@ def _print_ragas_report(
             print(f"    {k:20s} {v:.4f}")
 
 
+def _print_miss_summary(
+    score_stats: dict[str, Any],
+) -> None:
+    """Hit@1 실패 요약을 콘솔에 출력한다."""
+    overall = score_stats.get("overall", {})
+    miss_count = overall.get("miss_count", 0)
+    miss_ids = overall.get("miss_query_ids", [])
+
+    print("\n" + "-" * 60)
+    print(f"  Hit@1 실패: {miss_count}건")
+    if miss_ids:
+        print(f"  실패 쿼리: {', '.join(miss_ids)}")
+    print("-" * 60)
+
+
 def _create_clients(
     provider: str, api_key: str
 ) -> tuple[Any, Any, Any]:
@@ -186,8 +201,20 @@ async def _run(args: argparse.Namespace) -> None:
             ir_results = await evaluate_retrieval(
                 searcher, dataset
             )
-            results["classic_ir"] = ir_results
-            _print_ir_report(ir_results)
+            results["classic_ir"] = {
+                "overall": ir_results["overall"],
+                "by_category": ir_results["by_category"],
+            }
+            results["query_results"] = ir_results[
+                "query_results"
+            ]
+            results["score_stats"] = ir_results[
+                "score_stats"
+            ]
+            _print_ir_report(results["classic_ir"])
+            _print_miss_summary(
+                ir_results["score_stats"]
+            )
 
         # 3. RAGAS 평가
         if not args.retrieval_only:
