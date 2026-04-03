@@ -29,12 +29,19 @@ _RAG_SOURCE_RE = re.compile(
 def _extract_references(
     messages: list[Any],
 ) -> str:
-    """ToolMessage에서 참고 자료 출처를 추출한다."""
+    """현재 턴의 ToolMessage에서 참고 자료 출처를 추출한다."""
+    # 마지막 HumanMessage 이후의 메시지만 대상으로 한다
+    last_human_idx = 0
+    for i, msg in enumerate(messages):
+        if isinstance(msg, HumanMessage):
+            last_human_idx = i
+    current_turn = messages[last_human_idx + 1:]
+
     seen_files: set[str] = set()
     rag_sources: list[tuple[str, str]] = []
     web_urls: list[tuple[str, str]] = []
 
-    for msg in messages:
+    for msg in current_turn:
         if not isinstance(msg, ToolMessage):
             continue
 
