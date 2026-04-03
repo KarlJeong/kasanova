@@ -1,78 +1,58 @@
-"""Classic IR 평가 — Hit Rate, MRR, Precision, NDCG at k."""
+"""Classic IR 평가 — ranx 기반 Precision, Recall, MAP, MRR, NDCG at k."""
 
 import logging
-import math
 from typing import Any
+
+from ranx import Qrels, Run, evaluate
 
 from app.rag.searcher import HybridSearcher
 
 logger = logging.getLogger(__name__)
 
 _K_VALUES = [1, 3, 5, 10]
+_METRICS = ["precision", "recall", "map", "mrr", "ndcg"]
 
 
-def hit_rate(
-    ground_truth_ids: list[str],
-    retrieved_ids: list[str],
-    k: int,
-) -> float:
-    """top-k 안에 정답 문서가 1개 이상 포함되면 1.0."""
-    top_k = retrieved_ids[:k]
-    gt_set = set(ground_truth_ids)
-    return 1.0 if gt_set & set(top_k) else 0.0
+def _build_metric_list(
+    k_values: list[int],
+) -> list[str]:
+    """ranx evaluate에 전달할 메트릭 문자열 목록을 생성한다."""
+    return [
+        f"{m}@{k}" for k in k_values for m in _METRICS
+    ]
 
 
-def mrr(
-    ground_truth_ids: list[str],
-    retrieved_ids: list[str],
-    k: int,
-) -> float:
-    """정답 문서가 처음 등장한 순위의 역수."""
-    gt_set = set(ground_truth_ids)
-    for i, doc_id in enumerate(retrieved_ids[:k]):
-        if doc_id in gt_set:
-            return 1.0 / (i + 1)
-    return 0.0
+def _evaluate_subset(
+    qrels_dict: dict[str, dict[str, int]],
+    run_dict: dict[str, dict[str, float]],
+    metrics: list[str],
+) -> dict[str, float]:
+    """Qrels/Run 부분집합에 대해 ranx evaluate를 실행한다."""
+    if not qrels_dict or not run_dict:
+        return {m: 0.0 for m in metrics}
 
+    # ranx는 빈 run entry를 허용하지 않으므로 필터링
+    filtered_run = {
+        qid: docs
+        for qid, docs in run_dict.items()
+        if docs
+    }
+    if not filtered_run:
+        return {m: 0.0 for m in metrics}
 
-def precision_at_k(
-    ground_truth_ids: list[str],
-    retrieved_ids: list[str],
-    k: int,
-) -> float:
-    """top-k 중 정답 문서 비율."""
-    top_k = retrieved_ids[:k]
-    if not top_k:
-        return 0.0
-    gt_set = set(ground_truth_ids)
-    relevant = sum(1 for d in top_k if d in gt_set)
-    return relevant / len(top_k)
+    # run에 남은 쿼리만 qrels에서도 사용
+    filtered_qrels = {
+        qid: rels
+        for qid, rels in qrels_dict.items()
+        if qid in filtered_run
+    }
+    if not filtered_qrels:
+        return {m: 0.0 for m in metrics}
 
-
-def ndcg_at_k(
-    ground_truth_ids: list[str],
-    retrieved_ids: list[str],
-    k: int,
-) -> float:
-    """순위 가중치를 반영한 정규화 누적 이득."""
-    gt_set = set(ground_truth_ids)
-    top_k = retrieved_ids[:k]
-
-    # DCG
-    dcg = 0.0
-    for i, doc_id in enumerate(top_k):
-        if doc_id in gt_set:
-            dcg += 1.0 / math.log2(i + 2)
-
-    # Ideal DCG
-    n_relevant = min(len(gt_set), k)
-    idcg = sum(
-        1.0 / math.log2(i + 2) for i in range(n_relevant)
-    )
-
-    if idcg == 0.0:
-        return 0.0
-    return dcg / idcg
+    qrels = Qrels(filtered_qrels)
+    run = Run(filtered_run)
+    result = evaluate(qrels, run, metrics)
+    return dict(result)
 
 
 async def evaluate_retrieval(
@@ -80,73 +60,70 @@ async def evaluate_retrieval(
     dataset: list[dict[str, Any]],
     k_values: list[int] | None = None,
 ) -> dict[str, Any]:
-    """평가셋에 대해 Classic IR 지표를 계산한다."""
+    """평가셋에 대해 IR 지표를 계산한다."""
     if k_values is None:
         k_values = _K_VALUES
 
     max_k = max(k_values)
-    metric_fns = {
-        "hit_rate": hit_rate,
-        "mrr": mrr,
-        "precision": precision_at_k,
-        "ndcg": ndcg_at_k,
-    }
+    metrics = _build_metric_list(k_values)
 
-    # 카테고리별 결과 수집
-    scores: dict[str, list[dict[str, float]]] = {}
-    for cat in {"hr", "ops", "benefit"}:
-        scores[cat] = []
+    qrels_dict: dict[str, dict[str, int]] = {}
+    run_dict: dict[str, dict[str, float]] = {}
+    category_map: dict[str, str] = {}
 
-    for item in dataset:
+    for idx, item in enumerate(dataset):
+        query_id = f"q_{idx}"
+        category_map[query_id] = item["category"]
+
+        # Ground truth
+        qrels_dict[query_id] = {
+            doc_id: 1
+            for doc_id in item["ground_truth_doc_ids"]
+        }
+
+        # Retrieval
         results = await searcher.search(
             query=item["question"],
             top_k=max_k,
             category=item["category"],
         )
-        retrieved_ids_raw = [r["doc_id"] for r in results]
+
+        # 중복 doc_id 제거 (첫 등장 유지)
         seen: set[str] = set()
-        retrieved_ids: list[str] = []
-        for did in retrieved_ids_raw:
-            if did not in seen:
-                seen.add(did)
-                retrieved_ids.append(did)
-        gt_ids = item["ground_truth_doc_ids"]
-
-        item_scores: dict[str, float] = {}
-        for k in k_values:
-            for name, fn in metric_fns.items():
-                item_scores[f"{name}@{k}"] = fn(
-                    gt_ids, retrieved_ids, k
-                )
-
-        category = item["category"]
-        if category in scores:
-            scores[category].append(item_scores)
-
-    # 카테고리별 평균
-    by_category: dict[str, dict[str, float]] = {}
-    all_scores: list[dict[str, float]] = []
-
-    for cat, cat_scores in scores.items():
-        if not cat_scores:
-            continue
-        keys = cat_scores[0].keys()
-        by_category[cat] = {
-            key: sum(s[key] for s in cat_scores)
-            / len(cat_scores)
-            for key in keys
-        }
-        all_scores.extend(cat_scores)
+        run_entry: dict[str, float] = {}
+        for r in results:
+            doc_id = r["doc_id"]
+            if doc_id not in seen:
+                seen.add(doc_id)
+                run_entry[doc_id] = float(r["score"])
+        run_dict[query_id] = run_entry
 
     # 전체 평균
-    overall: dict[str, float] = {}
-    if all_scores:
-        keys = all_scores[0].keys()
-        overall = {
-            key: sum(s[key] for s in all_scores)
-            / len(all_scores)
-            for key in keys
+    overall = _evaluate_subset(
+        qrels_dict, run_dict, metrics
+    )
+
+    # 카테고리별 평균
+    categories = {"hr", "ops", "benefit"}
+    by_category: dict[str, dict[str, float]] = {}
+
+    for cat in categories:
+        cat_qids = [
+            qid
+            for qid, c in category_map.items()
+            if c == cat
+        ]
+        if not cat_qids:
+            continue
+        cat_qrels = {
+            qid: qrels_dict[qid] for qid in cat_qids
         }
+        cat_run = {
+            qid: run_dict[qid] for qid in cat_qids
+        }
+        by_category[cat] = _evaluate_subset(
+            cat_qrels, cat_run, metrics
+        )
 
     return {
         "overall": overall,
