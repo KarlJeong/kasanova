@@ -18,6 +18,7 @@ class Settings(BaseSettings):
     llm_model_name: str = "phi3"
     llm_api_key: str = ""
     TAVILY_API_KEY: str
+    redis_url: str = "redis://localhost:6379/0"
 
     @cached_property
     def checkpoint_db_url(self) -> str:

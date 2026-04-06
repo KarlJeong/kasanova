@@ -8,9 +8,10 @@ from langgraph.prebuilt import ToolNode, tools_condition
 
 from app.graph.nodes import call_llm
 from app.graph.state import KasaNovaState
-from app.graph.tools import create_web_search_tool
+from app.graph.tools import create_dabs_list_tool, create_web_search_tool
 from app.rag.retrieval_tool import create_retrieval_tool
 from app.rag.searcher import HybridSearcher
+from app.services.dabs_service import DabsService
 
 logger = logging.getLogger(__name__)
 
@@ -19,10 +20,12 @@ def build_workflow(
     checkpointer: BaseCheckpointSaver,
     llm: BaseChatModel,
     searcher: HybridSearcher,
+    dabs_service: DabsService,
 ) -> StateGraph:
     web_search = create_web_search_tool()
     retrieval_tool = create_retrieval_tool(searcher)
-    tools = [web_search, retrieval_tool]
+    dabs_list = create_dabs_list_tool(dabs_service)
+    tools = [web_search, retrieval_tool, dabs_list]
     llm_with_tools = llm.bind_tools(tools)
     llm_base = llm
     tool_node = ToolNode(tools)

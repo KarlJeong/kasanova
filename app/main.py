@@ -13,6 +13,8 @@ from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from opensearchpy import AsyncOpenSearch
 from sqlalchemy import text
 
+from redis.asyncio import Redis
+
 from app.api.index_router import router as index_router
 from app.api.slack import router as slack_router
 from app.core.config import get_settings
@@ -22,6 +24,7 @@ from app.graph.workflow import build_workflow
 from app.rag.embedder import Embedder
 from app.rag.indexer import DocumentIndexer
 from app.rag.searcher import HybridSearcher
+from app.services.dabs_service import DabsService
 
 logging.basicConfig(
     level=logging.INFO,
@@ -103,13 +106,18 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         )
         logger.info("하이브리드 검색기 준비 완료")
 
+        redis = Redis.from_url(settings.redis_url)
+        dabs_service = DabsService(redis)
+        logger.info("Redis 연결 완료")
+
         llm = get_llm()
         app.state.workflow = build_workflow(
-            checkpointer, llm, searcher
+            checkpointer, llm, searcher, dabs_service
         )
 
         yield
 
+        await redis.aclose()
         await os_client.close()
 
     # Shutdown
