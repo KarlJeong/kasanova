@@ -53,7 +53,9 @@ class HybridSearcher:
             }
 
         response = await self.os_client.search(
-            index=self.index_name, body=body
+            index=self.index_name,
+            body=body,
+            params={"search_pipeline": "weighted-mean-pipeline"},
         )
 
         results: list[dict[str, Any]] = []
