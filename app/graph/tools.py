@@ -21,25 +21,24 @@ def create_web_search_tool() -> BaseTool:
     return web_search
 
 
-def create_dabs_list_tool(dabs_service: DabsService) -> BaseTool:
-    """DABS 목록 조회 Tool을 생성한다."""
+def create_dabs_summary_list_tool(dabs_service: DabsService) -> BaseTool:
+    """DABS를 식별하기 위한 목록 조회 Tool을 생성한다."""
 
     @tool
-    async def dabs_list() -> str:
-        """Retrieve the list of all DABS (Digital Asset-Backed Securities) \
-managed by KASA.
-Use this tool when the user asks about a specific DABS, building, \
-or real estate asset to identify the correct dabs_code.
-Returns a summary list containing code, name, address, \
-and building info for each DABS."""
+    async def dabs_summary_list() -> str:
+        """Retrieve the list of all DABS (Digital Asset-Backed Securities) managed by KASA.
+          Use this tool when the user asks about a specific DABS, 댑스, building, 빌딩, 건물, \,
+          , real estate asset, or 부동산 to identify the correct dabs_code.
+          Returns a summary list containing code, name, address, \,
+          and building info for each DABS."""
         summaries = await dabs_service.get_dabs_summary_list()
         lines = []
         for d in summaries:
             lines.append(
-                f"[{d['code']}] {d['name']}"
-                f" | {d.get('address', '')}"
-                f" | {d.get('buildingSubtitle', '')}"
+              f"dabs_code: {d['code']} | name: {d['name']}"
+              f" | address: {d.get('address', '')}"
+              f" | building: {d.get('buildingSubtitle', '')}"
             )
         return "\n".join(lines)
 
-    return dabs_list
+    return dabs_summary_list
