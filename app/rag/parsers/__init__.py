@@ -3,6 +3,7 @@ from collections.abc import Callable
 from app.rag.parsers.pdf_parser import parse_pdf
 from app.rag.parsers.pptx_parser import parse_pptx
 from app.rag.parsers.docx_parser import parse_docx
+from app.rag.parsers.md_parser import parse_md
 
 
 class UnsupportedFormatError(Exception):
@@ -13,6 +14,7 @@ _PARSERS_BY_EXT: dict[str, Callable[[bytes], str]] = {
     ".pdf": parse_pdf,
     ".pptx": parse_pptx,
     ".docx": parse_docx,
+    ".md": parse_md,
 }
 
 
