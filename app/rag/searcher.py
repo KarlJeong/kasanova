@@ -5,7 +5,25 @@ from app.rag.embedder import Embedder
 
 
 class HybridSearcher:
-    """BM25 + k-NN 하이브리드 검색 → RRF 병합."""
+    """
+    BM25 + k-NN 하이브리드 검색 → Weighted Mean 병합.
+    curl -X PUT "http://localhost:9200/_search/pipeline/weighted-mean-pipeline" \
+      -H 'Content-Type: application/json' \
+      -d '{
+        "description": "Post processor for hybrid search with Weighted Mean",
+        "phase_results_processors": [
+          {
+            "normalization-processor": {
+              "normalization": { "technique": "min_max" },
+              "combination": {
+                "technique": "arithmetic_mean",
+                "parameters": { "weights": [0.3, 0.7] }
+              }
+            }
+          }
+        ]
+      }'
+    """
 
     def __init__(
         self,
