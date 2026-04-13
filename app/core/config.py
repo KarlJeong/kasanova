@@ -20,6 +20,11 @@ class Settings(BaseSettings):
     llm_api_key: str = ""
     TAVILY_API_KEY: str
     redis_url: str = "redis://localhost:6379/0"
+    mysql_host: str = "localhost"
+    mysql_port: int = 3306
+    mysql_db: str = ""
+    mysql_user: str = ""
+    mysql_password: str = ""
 
     @cached_property
     def checkpoint_db_url(self) -> str:
