@@ -9,6 +9,10 @@ from opensearchpy.helpers import async_bulk
 from app.rag.chunker import chunk_text
 from app.rag.embedder import Embedder
 from app.rag.parsers import parse_by_extension
+from app.rag.schema_jsonl import (
+    parse_schema_jsonl,
+    split_schema_row,
+)
 
 
 class DocumentNotFoundError(Exception):
@@ -91,6 +95,90 @@ class DocumentIndexer:
             "doc_id": doc_id,
             "filename": filename,
             "chunks": len(chunks),
+            "status": "indexed",
+        }
+
+    async def index_schema_jsonl(
+        self,
+        filename: str,
+        content: bytes,
+    ) -> dict[str, Any]:
+        """JSONL 스키마 파일을 행 단위로 인덱싱한다.
+
+        각 행의 table_name을 doc_id로 사용하고, full_text를
+        헤더 보존 방식으로 청크 분할한다. 재업로드 시 같은
+        table_name의 기존 청크는 삭제 후 덮어쓴다.
+        """
+        rows = parse_schema_jsonl(content)
+        if not rows:
+            return {
+                "filename": filename,
+                "indexed_tables": 0,
+                "total_chunks": 0,
+                "tables": [],
+                "status": "indexed",
+            }
+
+        indexed_at = datetime.now(timezone.utc).isoformat()
+        actions: list[dict[str, Any]] = []
+        table_summaries: list[dict[str, Any]] = []
+
+        all_texts: list[str] = []
+        per_row_chunks: list[list[str]] = []
+        for row in rows:
+            row_chunks = split_schema_row(row.full_text)
+            per_row_chunks.append(row_chunks)
+            all_texts.extend(row_chunks)
+
+        embeddings = await asyncio.to_thread(
+            self.embedder.encode, all_texts
+        )
+
+        cursor = 0
+        for row, row_chunks in zip(rows, per_row_chunks):
+            doc_id = row.table_name
+            await self.os_client.delete_by_query(
+                index=self.index_name,
+                body={
+                    "query": {"term": {"doc_id": doc_id}}
+                },
+            )
+            for chunk_index, text in enumerate(row_chunks):
+                actions.append(
+                    {
+                        "_index": self.index_name,
+                        "_source": {
+                            "doc_id": doc_id,
+                            "chunk_index": chunk_index,
+                            "content": text,
+                            "embedding": embeddings[
+                                cursor + chunk_index
+                            ],
+                            "metadata": {
+                                "filename": filename,
+                                "file_type": "jsonl",
+                                "indexed_at": indexed_at,
+                                "table_name": row.table_name,
+                                "has_yaml": row.has_yaml,
+                            },
+                        },
+                    }
+                )
+            cursor += len(row_chunks)
+            table_summaries.append(
+                {
+                    "table_name": row.table_name,
+                    "chunks": len(row_chunks),
+                }
+            )
+
+        await async_bulk(self.os_client, actions)
+
+        return {
+            "filename": filename,
+            "indexed_tables": len(rows),
+            "total_chunks": len(actions),
+            "tables": table_summaries,
             "status": "indexed",
         }
 
