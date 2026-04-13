@@ -26,6 +26,54 @@ _RAG_SOURCE_RE = re.compile(
     r"\[(\d+)\] \(score: ([\d.]+)\) \[(.+?)\]"
 )
 
+_FENCED_BLOCK_RE = re.compile(
+    r"```[^\n`]*\n.*?\n?```",
+    re.DOTALL,
+)
+_LOOSE_SQL_LINE_RE = re.compile(
+    r"^\s*(SELECT|WITH|FROM|WHERE|GROUP BY|ORDER BY|HAVING|JOIN|"
+    r"LEFT JOIN|RIGHT JOIN|INNER JOIN|UNION|LIMIT)\b.*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+_SQL_KEYWORD_RE = re.compile(
+    r"\b(SELECT|INSERT|UPDATE|DELETE|DROP|ALTER|TRUNCATE|FROM|WHERE|JOIN)\b",
+    re.IGNORECASE,
+)
+
+
+def _strip_sql_from_answer(text: str) -> str:
+    """최종 답변에서 LLM이 누출시킨 SQL/코드펜스를 제거한다.
+
+    ReAct 상위 LLM이 시스템 프롬프트의 "SQL 금지" 규칙을 무시하고
+    답변 앞뒤에 SQL 코드 펜스를 그대로 출력하는 경우가 있다.
+    사용자가 Slack에서 보는 최종 응답에는 자연어 답변만 남기기 위해
+    송출 직전에 다음을 수행한다.
+
+    1. 모든 펜스 블록(```...```) 제거 (언어 태그 무관)
+    2. 반쪽만 열린 채 남은 ``` 토큰 정리
+    3. SQL 키워드로 시작하는 잔여 라인 제거
+    """
+    stripped = _FENCED_BLOCK_RE.sub("", text)
+    # 반쪽 펜스 정리
+    stripped = stripped.replace("```sql", "").replace("```SQL", "")
+    stripped = stripped.replace("```", "")
+    # 남은 SQL 라인 제거 (키워드가 줄 선두에 있는 경우만)
+    if _SQL_KEYWORD_RE.search(stripped):
+        stripped = _LOOSE_SQL_LINE_RE.sub("", stripped)
+    # 공백/빈 줄 정리
+    lines = [line.rstrip() for line in stripped.splitlines()]
+    cleaned_lines: list[str] = []
+    prev_blank = False
+    for line in lines:
+        if not line.strip():
+            if prev_blank:
+                continue
+            prev_blank = True
+        else:
+            prev_blank = False
+        cleaned_lines.append(line)
+    return "\n".join(cleaned_lines).strip()
+
 
 def _extract_references(
     messages: list[Any],
@@ -183,6 +231,12 @@ async def _stream_response(
                 )
 
         elif kind == "on_chat_model_stream":
+            # text_to_sql_tool 등 tools 노드 내부에서 돌아가는
+            # inner LLM 스트림은 버퍼에 담으면 SQL이 그대로 섞인다.
+            # 최상위 call_llm 노드에서 발생한 토큰만 사용한다.
+            node = event.get("metadata", {}).get("langgraph_node")
+            if node != "call_llm":
+                continue
             chunk = event["data"]["chunk"]
             raw = (
                 chunk.content
@@ -292,6 +346,15 @@ async def handle_message_event(
                 channel=channel,
                 loading_ts=loading_ts,
             )
+
+            sanitized = _strip_sql_from_answer(answer)
+            if sanitized != answer:
+                logger.info(
+                    "[Slack] SQL/code-fence 제거됨 (원본 %d자 → %d자)",
+                    len(answer),
+                    len(sanitized),
+                )
+            answer = sanitized or "응답을 생성하지 못했습니다."
 
             ref_messages: list[Any] = [
                 HumanMessage(content=""),

@@ -73,10 +73,12 @@ class TestStreamResponse:
         events = [
             {
                 "event": "on_chat_model_stream",
+                "metadata": {"langgraph_node": "call_llm"},
                 "data": {"chunk": AIMessageChunk(content="안녕")},
             },
             {
                 "event": "on_chat_model_stream",
+                "metadata": {"langgraph_node": "call_llm"},
                 "data": {"chunk": AIMessageChunk(content="하세요")},
             },
         ]
@@ -104,14 +106,17 @@ class TestStreamResponse:
         events = [
             {
                 "event": "on_chat_model_stream",
+                "metadata": {"langgraph_node": "call_llm"},
                 "data": {"chunk": AIMessageChunk(content="a")},
             },
             {
                 "event": "on_chat_model_stream",
+                "metadata": {"langgraph_node": "call_llm"},
                 "data": {"chunk": AIMessageChunk(content="b")},
             },
             {
                 "event": "on_chat_model_stream",
+                "metadata": {"langgraph_node": "call_llm"},
                 "data": {"chunk": AIMessageChunk(content="c")},
             },
         ]
@@ -143,10 +148,12 @@ class TestStreamResponse:
         events = [
             {
                 "event": "on_chat_model_stream",
+                "metadata": {"langgraph_node": "call_llm"},
                 "data": {"chunk": AIMessageChunk(content="a")},
             },
             {
                 "event": "on_chat_model_stream",
+                "metadata": {"langgraph_node": "call_llm"},
                 "data": {"chunk": AIMessageChunk(content="b")},
             },
         ]
@@ -184,6 +191,7 @@ class TestStreamResponse:
         events = [
             {
                 "event": "on_chat_model_stream",
+                "metadata": {"langgraph_node": "call_llm"},
                 "data": {"chunk": AIMessageChunk(content="최종 답변")},
             },
         ]
@@ -267,6 +275,48 @@ class TestStreamResponse:
         assert tool_messages[0].name == "retrieval_tool"
         assert tool_messages[1].name == "web_search"
 
+    async def test_inner_tool_llm_stream_is_filtered(self) -> None:
+        """tools 노드 내부 LLM 스트림(SQL 생성 등)은 버퍼에 쌓이지 않는다."""
+        from app.api.slack import _stream_response
+
+        events = [
+            {
+                "event": "on_chat_model_stream",
+                "metadata": {"langgraph_node": "tools"},
+                "data": {
+                    "chunk": AIMessageChunk(
+                        content="SELECT COUNT(*) FROM kasa_member;"
+                    )
+                },
+            },
+            {
+                "event": "on_chat_model_stream",
+                "metadata": {"langgraph_node": "call_llm"},
+                "data": {
+                    "chunk": AIMessageChunk(
+                        content="전체 회원은 42명입니다."
+                    )
+                },
+            },
+        ]
+        mock_workflow = MagicMock()
+        mock_workflow.astream_events = lambda *a, **kw: _make_stream_events(
+            events
+        )
+        mock_slack = AsyncMock()
+
+        answer, _ = await _stream_response(
+            workflow=mock_workflow,
+            input_messages={"messages": [HumanMessage(content="test")]},
+            config={"configurable": {"thread_id": "t1"}},
+            slack_service=mock_slack,
+            channel="C123",
+            loading_ts="ts123",
+        )
+
+        assert "SELECT" not in answer
+        assert answer == "전체 회원은 42명입니다."
+
     async def test_empty_token_chunks_ignored(self) -> None:
         """빈 토큰 청크는 버퍼에 추가되지 않는다."""
         from app.api.slack import _stream_response
@@ -274,10 +324,12 @@ class TestStreamResponse:
         events = [
             {
                 "event": "on_chat_model_stream",
+                "metadata": {"langgraph_node": "call_llm"},
                 "data": {"chunk": AIMessageChunk(content="")},
             },
             {
                 "event": "on_chat_model_stream",
+                "metadata": {"langgraph_node": "call_llm"},
                 "data": {"chunk": AIMessageChunk(content="답변")},
             },
         ]
@@ -350,6 +402,7 @@ class TestHandleMessageEventStreaming:
             },
             {
                 "event": "on_chat_model_stream",
+                "metadata": {"langgraph_node": "call_llm"},
                 "data": {"chunk": AIMessageChunk(content="답변입니다")},
             },
         ]
