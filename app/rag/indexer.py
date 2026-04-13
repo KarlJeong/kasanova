@@ -40,7 +40,7 @@ class DocumentIndexer:
         filename: str,
         file_type: str,
         content: bytes,
-        category: str | None = "general",
+        category: str | None = None,
     ) -> dict[str, Any]:
         """문서를 인덱싱한다."""
         ext = Path(filename).suffix
