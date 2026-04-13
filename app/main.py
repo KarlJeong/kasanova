@@ -35,34 +35,6 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 settings = get_settings()
 
-INDEX_SCHEMA = {
-    "settings": {"index": {"knn": True}},
-    "mappings": {
-        "properties": {
-            "doc_id": {"type": "keyword"},
-            "chunk_index": {"type": "integer"},
-            "content": {"type": "text", "analyzer": "nori"},
-            "embedding": {
-                "type": "knn_vector",
-                "dimension": 1024,
-                "method": {
-                    "name": "hnsw",
-                    "space_type": "cosinesimil",
-                    "engine": "lucene",
-                },
-            },
-            "metadata": {
-                "properties": {
-                    "filename": {"type": "keyword"},
-                    "file_type": {"type": "keyword"},
-                    "indexed_at": {"type": "date"},
-                }
-            },
-        }
-    },
-}
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # Startup: verify DB connection
@@ -84,18 +56,17 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             verify_certs=False,
         )
 
-        async def _ensure_index(name: str) -> None:
+        async def _require_index(name: str) -> None:
             if not await os_client.indices.exists(index=name):
-                await os_client.indices.create(
-                    index=name,
-                    body=INDEX_SCHEMA,
+                raise RuntimeError(
+                    f"OpenSearch 인덱스가 존재하지 않습니다: {name}. "
+                    f"운영자가 사전에 생성해야 합니다."
                 )
-                logger.info(f"OpenSearch 인덱스 생성: {name}")
 
         index_name = settings.opensearch_index
         schema_index_name = settings.opensearch_schema_index
-        await _ensure_index(index_name)
-        await _ensure_index(schema_index_name)
+        await _require_index(index_name)
+        await _require_index(schema_index_name)
 
         app.state.indexer = DocumentIndexer(
             os_client=os_client,
