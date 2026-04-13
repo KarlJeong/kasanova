@@ -186,7 +186,7 @@ class TestSchemaEndpoints:
         mock_schema_indexer.index_document.assert_awaited_once()
         mock_indexer.index_document.assert_not_awaited()
 
-    async def test_upload_default_category_is_schema(
+    async def test_upload_passes_null_category(
         self,
         client: AsyncClient,
         mock_schema_indexer: MagicMock,
@@ -199,7 +199,7 @@ class TestSchemaEndpoints:
         kwargs = (
             mock_schema_indexer.index_document.call_args.kwargs
         )
-        assert kwargs["category"] == "schema"
+        assert kwargs["category"] is None
 
     async def test_list_returns_schema_documents(
         self,

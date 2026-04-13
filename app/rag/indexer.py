@@ -40,7 +40,7 @@ class DocumentIndexer:
         filename: str,
         file_type: str,
         content: bytes,
-        category: str = "general",
+        category: str | None = "general",
     ) -> dict[str, Any]:
         """문서를 인덱싱한다."""
         ext = Path(filename).suffix
@@ -63,6 +63,14 @@ class DocumentIndexer:
             body={"query": {"term": {"doc_id": doc_id}}},
         )
 
+        metadata: dict[str, Any] = {
+            "filename": filename,
+            "file_type": file_type,
+            "indexed_at": indexed_at,
+        }
+        if category is not None:
+            metadata["category"] = category
+
         actions = [
             {
                 "_index": self.index_name,
@@ -71,12 +79,7 @@ class DocumentIndexer:
                     "chunk_index": chunk.chunk_index,
                     "content": chunk.content,
                     "embedding": embeddings[i],
-                    "metadata": {
-                        "filename": filename,
-                        "file_type": file_type,
-                        "indexed_at": indexed_at,
-                        "category": category,
-                    },
+                    "metadata": metadata,
                 },
             }
             for i, chunk in enumerate(chunks)
