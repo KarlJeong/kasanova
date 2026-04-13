@@ -31,6 +31,7 @@ opensearch-py = { version = "^2.5", extras = ["async"] }
 python-multipart = "^0.0.9"
 redis = "^7.4.0"
 httpx = "^0.28.1"
+aiomysql = "^0.3.2"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.0"

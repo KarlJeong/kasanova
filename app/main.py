@@ -20,9 +20,11 @@ from app.api.slack import router as slack_router
 from app.core.config import get_settings
 from app.core.database import engine
 from app.core.llm import get_llm
+from app.db.mysql_client import MySQLClient
 from app.graph.workflow import build_workflow
 from app.rag.embedder import Embedder
 from app.rag.indexer import DocumentIndexer
+from app.rag.schema_searcher import SchemaSearcher
 from app.rag.searcher import HybridSearcher
 from app.services.dabs_service import DabsService
 
@@ -85,7 +87,23 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             embedder=embedder,
             index_name=index_name,
         )
+        schema_hybrid = HybridSearcher(
+            os_client=os_client,
+            embedder=embedder,
+            index_name=schema_index_name,
+        )
+        schema_searcher = SchemaSearcher(schema_hybrid)
         logger.info("하이브리드 검색기 준비 완료")
+
+        mysql_client = MySQLClient(
+            host=settings.mysql_host,
+            port=settings.mysql_port,
+            db=settings.mysql_db,
+            user=settings.mysql_user,
+            password=settings.mysql_password,
+        )
+        await mysql_client.connect()
+        logger.info("MySQL 풀 준비 완료")
 
         redis = Redis.from_url(settings.redis_url)
         dabs_service = DabsService(redis)
@@ -93,12 +111,18 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
         llm = get_llm()
         app.state.workflow = build_workflow(
-            checkpointer, llm, searcher, dabs_service
+            checkpointer,
+            llm,
+            searcher,
+            schema_searcher,
+            mysql_client,
+            dabs_service,
         )
 
         yield
 
         await redis.aclose()
+        await mysql_client.close()
         await os_client.close()
 
     # Shutdown
