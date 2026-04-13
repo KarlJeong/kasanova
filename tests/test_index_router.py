@@ -34,7 +34,35 @@ def mock_indexer() -> MagicMock:
 
 
 @pytest.fixture
-async def client(mock_indexer: MagicMock):
+def mock_schema_indexer() -> MagicMock:
+    indexer = MagicMock()
+    indexer.index_document = AsyncMock(
+        return_value={
+            "doc_id": "schema_abc12345",
+            "filename": "schema.pdf",
+            "chunks": 7,
+            "status": "indexed",
+        }
+    )
+    indexer.list_documents = AsyncMock(
+        return_value=[
+            {
+                "doc_id": "schema_abc12345",
+                "filename": "schema.pdf",
+                "chunks": 7,
+                "indexed_at": "2026-03-26T12:00:00Z",
+            }
+        ]
+    )
+    indexer.delete_document = AsyncMock(return_value=None)
+    return indexer
+
+
+@pytest.fixture
+async def client(
+    mock_indexer: MagicMock,
+    mock_schema_indexer: MagicMock,
+):
     from fastapi import FastAPI
 
     from app.api.index_router import router
@@ -42,6 +70,7 @@ async def client(mock_indexer: MagicMock):
     app = FastAPI()
     app.include_router(router)
     app.state.indexer = mock_indexer
+    app.state.schema_indexer = mock_schema_indexer
 
     transport = ASGITransport(app=app)
     async with AsyncClient(
@@ -136,5 +165,76 @@ class TestDeleteDocument:
         )
         resp = await client.delete(
             "/index/documents/nonexistent"
+        )
+        assert resp.status_code == 404
+
+
+class TestSchemaEndpoints:
+    async def test_upload_routes_to_schema_indexer(
+        self,
+        client: AsyncClient,
+        mock_indexer: MagicMock,
+        mock_schema_indexer: MagicMock,
+        pdf_bytes: bytes,
+    ) -> None:
+        resp = await client.post(
+            "/index/schema/documents",
+            files={"file": ("schema.pdf", pdf_bytes)},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["doc_id"] == "schema_abc12345"
+        mock_schema_indexer.index_document.assert_awaited_once()
+        mock_indexer.index_document.assert_not_awaited()
+
+    async def test_upload_default_category_is_schema(
+        self,
+        client: AsyncClient,
+        mock_schema_indexer: MagicMock,
+        pdf_bytes: bytes,
+    ) -> None:
+        await client.post(
+            "/index/schema/documents",
+            files={"file": ("schema.pdf", pdf_bytes)},
+        )
+        kwargs = (
+            mock_schema_indexer.index_document.call_args.kwargs
+        )
+        assert kwargs["category"] == "schema"
+
+    async def test_list_returns_schema_documents(
+        self,
+        client: AsyncClient,
+        mock_indexer: MagicMock,
+    ) -> None:
+        resp = await client.get("/index/schema/documents")
+        assert resp.status_code == 200
+        docs = resp.json()["documents"]
+        assert len(docs) == 1
+        assert docs[0]["doc_id"] == "schema_abc12345"
+        mock_indexer.list_documents.assert_not_awaited()
+
+    async def test_delete_schema_document(
+        self,
+        client: AsyncClient,
+        mock_schema_indexer: MagicMock,
+    ) -> None:
+        resp = await client.delete(
+            "/index/schema/documents/schema_abc12345"
+        )
+        assert resp.status_code == 200
+        mock_schema_indexer.delete_document.assert_awaited_once_with(
+            "schema_abc12345"
+        )
+
+    async def test_delete_schema_nonexistent_returns_404(
+        self,
+        client: AsyncClient,
+        mock_schema_indexer: MagicMock,
+    ) -> None:
+        mock_schema_indexer.delete_document = AsyncMock(
+            side_effect=DocumentNotFoundError("not found")
+        )
+        resp = await client.delete(
+            "/index/schema/documents/nonexistent"
         )
         assert resp.status_code == 404

@@ -84,18 +84,28 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             verify_certs=False,
         )
 
+        async def _ensure_index(name: str) -> None:
+            if not await os_client.indices.exists(index=name):
+                await os_client.indices.create(
+                    index=name,
+                    body=INDEX_SCHEMA,
+                )
+                logger.info(f"OpenSearch 인덱스 생성: {name}")
+
         index_name = settings.opensearch_index
-        if not await os_client.indices.exists(index=index_name):
-            await os_client.indices.create(
-                index=index_name,
-                body=INDEX_SCHEMA,
-            )
-            logger.info(f"OpenSearch 인덱스 생성: {index_name}")
+        schema_index_name = settings.opensearch_schema_index
+        await _ensure_index(index_name)
+        await _ensure_index(schema_index_name)
 
         app.state.indexer = DocumentIndexer(
             os_client=os_client,
             embedder=embedder,
             index_name=index_name,
+        )
+        app.state.schema_indexer = DocumentIndexer(
+            os_client=os_client,
+            embedder=embedder,
+            index_name=schema_index_name,
         )
         logger.info("RAG 인덱서 준비 완료")
 

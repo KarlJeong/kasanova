@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     slack_signing_secret: str = ""
     opensearch_url: str = "http://localhost:9200"
     opensearch_index: str = "kasanova_docs"
+    opensearch_schema_index: str = "kasanova_schema"
     llm_provider: str = "ollama"
     llm_server_url: str = "http://localhost:11434"
     llm_model_name: str = "phi3"
