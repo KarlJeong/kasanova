@@ -30,7 +30,7 @@ def _get_schema_indexer(request: Request) -> DocumentIndexer:
 async def _upload(
     indexer: DocumentIndexer,
     file: UploadFile,
-    category: str,
+    category: str | None,
 ) -> dict:
     content = await file.read()
     filename = file.filename or "unknown"
@@ -108,11 +108,10 @@ async def delete_document(
 async def upload_schema_document(
     request: Request,
     file: UploadFile = File(...),
-    category: str = Form("schema"),
 ) -> dict:
     """문서를 스키마 인덱스(kasanova_schema)에 저장한다."""
     return await _upload(
-        _get_schema_indexer(request), file, category
+        _get_schema_indexer(request), file, category=None
     )
 
 
