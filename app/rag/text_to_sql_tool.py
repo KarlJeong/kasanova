@@ -70,8 +70,25 @@ def _build_summary_prompt(query: str, rows: list) -> str:
     return (
         f"질문: {query}\n\n"
         f"SQL 결과:\n{rows}\n\n"
-        "결과를 자연어로 간단히 요약해줘."
+        "규칙:\n"
+        "- 결과를 한국어 자연어 한두 문장으로 간단히 요약해라.\n"
+        "- SQL 문, 코드 블록(```), 마크다운, 테이블명/컬럼명 노출 금지.\n"
+        "- 답 외에 '쿼리를 실행했다', '결과는 다음과 같다' 같은 메타 설명 금지.\n"
+        "- 숫자와 단위만 담백하게 전달."
     )
+
+
+_CODE_BLOCK_PATTERN = re.compile(
+    r"```[\s\S]*?```", re.MULTILINE
+)
+
+
+def _strip_code_blocks(text: str) -> str:
+    """요약 응답에 섞여 들어온 코드 블록을 제거한다."""
+    cleaned = _CODE_BLOCK_PATTERN.sub("", text)
+    return "\n".join(
+        line for line in cleaned.splitlines() if line.strip()
+    ).strip()
 
 
 def _extract_llm_text(response) -> str:
@@ -166,6 +183,12 @@ def create_text_to_sql_tool(
         summary_response = await llm.ainvoke(
             _build_summary_prompt(query, rows)
         )
-        return _extract_llm_text(summary_response).strip()
+        summary = _strip_code_blocks(
+            _extract_llm_text(summary_response)
+        )
+        logger.info(
+            "[text_to_sql_tool] 요약 응답: %s", summary
+        )
+        return summary
 
     return text_to_sql_tool
