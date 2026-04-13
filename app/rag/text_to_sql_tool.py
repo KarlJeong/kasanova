@@ -89,9 +89,26 @@ def create_text_to_sql_tool(
 
     @tool
     async def text_to_sql_tool(query: str) -> str:
-        """사내 MySQL DB를 조회할 때 사용합니다.
-        회원 수, 거래 현황, 수익 지급 이력 등 내부 데이터의
-        정량 질문에 사용하세요.
+        """사내 MySQL DB를 조회해 정량 질문에 답할 때 사용하는 도구.
+
+        회원 수, 거래 건수, 수익 지급 금액 등 숫자·집계·필터 기반의
+        내부 DB 질문에 적합하다. 문서 지식·정책·가이드 질문은
+        retrieval_tool을 사용하라.
+
+        query (필수):
+        - 반드시 사용자가 말한 **원본 자연어 질문을 그대로** 넘겨라.
+        - 한국어 질문은 한국어 그대로. SQL·영어 의역·재작성 금지.
+        - 이 도구 내부에서 스키마 검색 후 LLM이 SQL을 생성한다.
+          호출자(상위 LLM)가 SQL을 만들면 안 된다.
+
+        올바른 사용 예시:
+        - query="이번 달 신규 가입 회원 수는?"
+        - query="지난주 DABS별 거래 금액 합계"
+        - query="현재 전체 활성 회원 수?"
+
+        잘못된 사용 예시 (금지):
+        - query="SELECT COUNT(*) FROM kasa_member WHERE ..."
+        - query="How many active members are there?"
         """
         logger.info("[text_to_sql_tool] query=%r", query)
 
@@ -101,6 +118,11 @@ def create_text_to_sql_tool(
                 "[text_to_sql_tool] 관련 스키마 없음"
             )
             return _CANNOT_ANSWER
+        logger.info(
+            "[text_to_sql_tool] 스키마 %d개 후보: %s",
+            len(schemas),
+            [s["table_name"] for s in schemas],
+        )
         schemas_text = _format_schemas(schemas)
 
         try:
@@ -127,11 +149,14 @@ def create_text_to_sql_tool(
         )
 
         if not _validate_sql(sql):
-            logger.info(
-                "[text_to_sql_tool] SQL 검증 실패"
+            logger.warning(
+                "[text_to_sql_tool] SQL 검증 실패: %s", sql
             )
             return _CANNOT_ANSWER
 
+        logger.info(
+            "[text_to_sql_tool] MySQL 실행: %s", sql
+        )
         rows = await mysql_client.execute_select(sql)
         if rows is None:
             return _CANNOT_ANSWER
