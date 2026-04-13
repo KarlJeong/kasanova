@@ -55,6 +55,18 @@ def mock_schema_indexer() -> MagicMock:
         ]
     )
     indexer.delete_document = AsyncMock(return_value=None)
+    indexer.index_schema_jsonl = AsyncMock(
+        return_value={
+            "filename": "merged_schema.jsonl",
+            "indexed_tables": 2,
+            "total_chunks": 3,
+            "tables": [
+                {"table_name": "t1", "chunks": 1},
+                {"table_name": "t2", "chunks": 2},
+            ],
+            "status": "indexed",
+        }
+    )
     return indexer
 
 
@@ -212,6 +224,54 @@ class TestSchemaEndpoints:
         assert len(docs) == 1
         assert docs[0]["doc_id"] == "schema_abc12345"
         mock_indexer.list_documents.assert_not_awaited()
+
+    async def test_upload_jsonl_routes_to_schema_jsonl(
+        self,
+        client: AsyncClient,
+        mock_schema_indexer: MagicMock,
+    ) -> None:
+        jsonl = (
+            '{"table_name":"t1","full_text":"header\\n desc:x",'
+            '"indexable":true,"has_yaml":true}\n'
+            '{"table_name":"t2","full_text":"header\\n desc:y",'
+            '"indexable":true,"has_yaml":false}\n'
+        ).encode("utf-8")
+        resp = await client.post(
+            "/index/schema/documents",
+            files={
+                "file": (
+                    "merged_schema.jsonl",
+                    jsonl,
+                    "application/jsonl",
+                )
+            },
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["indexed_tables"] == 2
+        assert data["total_chunks"] == 3
+        mock_schema_indexer.index_schema_jsonl.assert_awaited_once()
+        mock_schema_indexer.index_document.assert_not_awaited()
+
+    async def test_upload_jsonl_invalid_returns_422(
+        self,
+        client: AsyncClient,
+        mock_schema_indexer: MagicMock,
+    ) -> None:
+        mock_schema_indexer.index_schema_jsonl = AsyncMock(
+            side_effect=ValueError("bad jsonl")
+        )
+        resp = await client.post(
+            "/index/schema/documents",
+            files={
+                "file": (
+                    "bad.jsonl",
+                    b"{not json}",
+                    "application/jsonl",
+                )
+            },
+        )
+        assert resp.status_code == 422
 
     async def test_delete_schema_document(
         self,

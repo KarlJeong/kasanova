@@ -109,10 +109,37 @@ async def upload_schema_document(
     request: Request,
     file: UploadFile = File(...),
 ) -> dict:
-    """문서를 스키마 인덱스(kasanova_schema)에 저장한다."""
-    return await _upload(
-        _get_schema_indexer(request), file, category=None
-    )
+    """문서를 스키마 인덱스(kasanova_schema)에 저장한다.
+
+    .jsonl 파일은 각 행(table)을 독립 문서로 처리한다.
+    그 외 확장자는 파일 단위로 인덱싱한다.
+    """
+    indexer = _get_schema_indexer(request)
+    filename = file.filename or "unknown"
+    ext = Path(filename).suffix.lower()
+
+    if ext == ".jsonl":
+        content = await file.read()
+        try:
+            return await indexer.index_schema_jsonl(
+                filename=filename,
+                content=content,
+            )
+        except ValueError as e:
+            raise HTTPException(
+                status_code=422,
+                detail=f"JSONL 파싱 실패: {e}",
+            )
+        except Exception as e:
+            logging.getLogger(__name__).exception(
+                "JSONL 인덱싱 실패"
+            )
+            raise HTTPException(
+                status_code=500,
+                detail=f"인덱싱 실패: {e}",
+            )
+
+    return await _upload(indexer, file, category=None)
 
 
 @router.get("/schema/documents")
