@@ -1,5 +1,7 @@
+import json
 import logging
 import re
+from typing import Any
 
 from langchain_core.language_models import BaseChatModel
 from langchain_core.tools import BaseTool, tool
@@ -20,6 +22,7 @@ _CODE_FENCE_PATTERN = re.compile(
 
 _CANNOT_ANSWER = "조회할 수 없습니다"
 _NO_DATA = "조회된 데이터가 없습니다"
+_MAX_PREVIEW_ROWS = 10
 
 
 def _strip_code_fence(text: str) -> str:
@@ -66,29 +69,27 @@ def _build_sql_prompt(
     )
 
 
-def _build_summary_prompt(query: str, rows: list) -> str:
-    return (
-        f"질문: {query}\n\n"
-        f"SQL 결과:\n{rows}\n\n"
-        "규칙:\n"
-        "- 결과를 한국어 자연어 한두 문장으로 간단히 요약해라.\n"
-        "- SQL 문, 코드 블록(```), 마크다운, 테이블명/컬럼명 노출 금지.\n"
-        "- 답 외에 '쿼리를 실행했다', '결과는 다음과 같다' 같은 메타 설명 금지.\n"
-        "- 숫자와 단위만 담백하게 전달."
+def _format_rows_for_tool_result(
+    rows: list[dict[str, Any]],
+) -> str:
+    """MySQL 결과를 상위 LLM이 그대로 활용할 수 있는 형태로 직렬화.
+
+    SQL을 절대 포함하지 않는 정해진 포맷으로 만들어,
+    inner-LLM 요약 단계에서 SQL이 누출되는 경로를 원천 차단한다.
+    """
+    preview = rows[:_MAX_PREVIEW_ROWS]
+    truncated = len(rows) > _MAX_PREVIEW_ROWS
+
+    # 단일 스칼라 결과는 값 하나로 단순화
+    if len(rows) == 1 and len(rows[0]) == 1:
+        only_value = next(iter(rows[0].values()))
+        return f"결과 1건: {only_value}"
+
+    rows_json = json.dumps(
+        preview, ensure_ascii=False, default=str
     )
-
-
-_CODE_BLOCK_PATTERN = re.compile(
-    r"```[\s\S]*?```", re.MULTILINE
-)
-
-
-def _strip_code_blocks(text: str) -> str:
-    """요약 응답에 섞여 들어온 코드 블록을 제거한다."""
-    cleaned = _CODE_BLOCK_PATTERN.sub("", text)
-    return "\n".join(
-        line for line in cleaned.splitlines() if line.strip()
-    ).strip()
+    suffix = " (상위 10건만 표시)" if truncated else ""
+    return f"결과 {len(rows)}건{suffix}: {rows_json}"
 
 
 def _extract_llm_text(response) -> str:
@@ -180,15 +181,10 @@ def create_text_to_sql_tool(
         if len(rows) == 0:
             return _NO_DATA
 
-        summary_response = await llm.ainvoke(
-            _build_summary_prompt(query, rows)
-        )
-        summary = _strip_code_blocks(
-            _extract_llm_text(summary_response)
-        )
+        tool_result = _format_rows_for_tool_result(rows)
         logger.info(
-            "[text_to_sql_tool] 요약 응답: %s", summary
+            "[text_to_sql_tool] tool 결과: %s", tool_result
         )
-        return summary
+        return tool_result
 
     return text_to_sql_tool

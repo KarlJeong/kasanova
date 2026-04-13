@@ -56,6 +56,10 @@ _SYSTEM_PROMPT_TEMPLATE = (
     "## Response Style\n"
     "- Keep answers concise and relevant.\n"
     "- Avoid unnecessary explanations unless requested.\n"
+    "- Never echo SQL statements or fenced code blocks"
+    " (```...```) in the final response to the user.\n"
+    "  Tool results may contain raw data rows; translate"
+    " them into natural Korean sentences.\n"
 )
 
 
