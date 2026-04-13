@@ -84,25 +84,32 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             verify_certs=False,
         )
 
-        index_name = settings.opensearch_index
-        if not await os_client.indices.exists(index=index_name):
-            await os_client.indices.create(
-                index=index_name,
-                body=INDEX_SCHEMA,
+        default_index = settings.opensearch_index
+        indexers: dict[str, DocumentIndexer] = {}
+        for name in settings.allowed_indices:
+            if not await os_client.indices.exists(index=name):
+                await os_client.indices.create(
+                    index=name,
+                    body=INDEX_SCHEMA,
+                )
+                logger.info(f"OpenSearch 인덱스 생성: {name}")
+            indexers[name] = DocumentIndexer(
+                os_client=os_client,
+                embedder=embedder,
+                index_name=name,
             )
-            logger.info(f"OpenSearch 인덱스 생성: {index_name}")
 
-        app.state.indexer = DocumentIndexer(
-            os_client=os_client,
-            embedder=embedder,
-            index_name=index_name,
+        app.state.indexers = indexers
+        app.state.default_index = default_index
+        app.state.indexer = indexers[default_index]
+        logger.info(
+            f"RAG 인덱서 준비 완료 (indices={list(indexers)})"
         )
-        logger.info("RAG 인덱서 준비 완료")
 
         searcher = HybridSearcher(
             os_client=os_client,
             embedder=embedder,
-            index_name=index_name,
+            index_name=default_index,
         )
         logger.info("하이브리드 검색기 준비 완료")
 

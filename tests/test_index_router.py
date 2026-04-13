@@ -41,7 +41,10 @@ async def client(mock_indexer: MagicMock):
 
     app = FastAPI()
     app.include_router(router)
+    mock_indexer.index_name = "kasanova_docs"
     app.state.indexer = mock_indexer
+    app.state.indexers = {"kasanova_docs": mock_indexer}
+    app.state.default_index = "kasanova_docs"
 
     transport = ASGITransport(app=app)
     async with AsyncClient(
@@ -84,6 +87,46 @@ class TestUploadDocument:
         resp = await client.post(
             "/index/documents",
             files={"file": ("readme.txt", b"hello")},
+        )
+        assert resp.status_code == 400
+
+    async def test_upload_to_explicit_index(
+        self,
+        client: AsyncClient,
+        mock_indexer: MagicMock,
+        pdf_bytes: bytes,
+    ) -> None:
+        extra = MagicMock()
+        extra.index_name = "kasanova_ops"
+        extra.index_document = AsyncMock(
+            return_value={
+                "doc_id": "ops_1",
+                "filename": "x.pdf",
+                "chunks": 1,
+                "status": "indexed",
+            }
+        )
+        client._transport.app.state.indexers[
+            "kasanova_ops"
+        ] = extra
+        resp = await client.post(
+            "/index/documents",
+            files={"file": ("x.pdf", pdf_bytes)},
+            data={"index_name": "kasanova_ops"},
+        )
+        assert resp.status_code == 200
+        extra.index_document.assert_awaited_once()
+        mock_indexer.index_document.assert_not_awaited()
+
+    async def test_upload_unknown_index_returns_400(
+        self,
+        client: AsyncClient,
+        pdf_bytes: bytes,
+    ) -> None:
+        resp = await client.post(
+            "/index/documents",
+            files={"file": ("x.pdf", pdf_bytes)},
+            data={"index_name": "nope"},
         )
         assert resp.status_code == 400
 
