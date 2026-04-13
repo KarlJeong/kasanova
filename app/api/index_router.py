@@ -84,7 +84,7 @@ async def _delete(
 async def upload_document(
     request: Request,
     file: UploadFile = File(...),
-    category: str = Form("general"),
+    category: str | None = Form(None),
 ) -> dict:
     """문서를 업로드하고 기본 인덱스에 저장한다."""
     return await _upload(_get_indexer(request), file, category)
