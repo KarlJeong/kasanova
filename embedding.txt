@@ -111,3 +111,17 @@ curl -X POST http://localhost:8000/index/documents -F "file=@/Users/karl-jeong/k
 curl -X POST http://localhost:8000/index/documents -F "file=@/Users/karl-jeong/kasa/kasanova/RAG/fds/mon910.md" -F "category=fds"
 curl -X POST http://localhost:8000/index/documents -F "file=@/Users/karl-jeong/kasa/kasanova/RAG/fds/README.md" -F "category=fds"
 curl -X POST http://localhost:8000/index/documents -F "file=@/Users/karl-jeong/kasa/kasanova/RAG/fds/run.md" -F "category=fds"
+
+
+curl -X POST http://localhost:8000/index/documents -F "file=@/Users/karl-jeong/kasa/kasanova/RAG/kb/customer_contact_process.md" -F "category=kb"
+curl -X POST http://localhost:8000/index/documents -F "file=@/Users/karl-jeong/kasa/kasanova/RAG/kb/dividend_payment_process.md" -F "category=kb"
+curl -X POST http://localhost:8000/index/documents -F "file=@/Users/karl-jeong/kasa/kasanova/RAG/kb/general_meeting_process.md" -F "category=kb"
+curl -X POST http://localhost:8000/index/documents -F "file=@/Users/karl-jeong/kasa/kasanova/RAG/kb/liquidation_dividend_process.md" -F "category=kb"
+curl -X POST http://localhost:8000/index/documents -F "file=@/Users/karl-jeong/kasa/kasanova/RAG/kb/market_trading_process.md" -F "category=kb"
+curl -X POST http://localhost:8000/index/documents -F "file=@/Users/karl-jeong/kasa/kasanova/RAG/kb/negotiated_trading_process.md" -F "category=kb"
+curl -X POST http://localhost:8000/index/documents -F "file=@/Users/karl-jeong/kasa/kasanova/RAG/kb/offering_subscription_process.md" -F "category=kb"
+curl -X POST http://localhost:8000/index/documents -F "file=@/Users/karl-jeong/kasa/kasanova/RAG/kb/pick_and_talk_event_process.md" -F "category=kb"
+curl -X POST http://localhost:8000/index/documents -F "file=@/Users/karl-jeong/kasa/kasanova/RAG/kb/signup_status_state_machine.md" -F "category=kb"
+
+
+curl -X POST http://localhost:8000/index/schema/documents -F "file=@/Users/karl-jeong/kasa/kasanova/RAG/kasaapi_schema/merged_schema.jsonl"

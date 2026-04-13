@@ -33,7 +33,7 @@ class MySQLClient:
             db=self.db,
             user=self.user,
             password=self.password,
-            autocommit=True,
+            autocommit=False,
         )
 
     async def close(self) -> None:

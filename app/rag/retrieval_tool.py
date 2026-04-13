@@ -13,6 +13,7 @@ class DocCategory(str, Enum):
     benefit = "benefit"
     fds = "fds"
     terms = "terms"
+    kb = "kb"
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +39,7 @@ def create_retrieval_tool(searcher: HybridSearcher) -> BaseTool:
         - "benefit": 복지, 업무 장비, 건강 검진, 퇴직연금, 휴가 관련
         - "terms": 고객에게 제공되는 약관 관련
         - "fds": Fraud Detection System, FDS, 시장감시시스템, 실시간 거래 데이터 감시, 가공, 적출, 기준가 생성 관련
+        - "kb": 플랫폼 비즈니스 도메인 지식, 거래 프로세스, 정산 로직, 수수료/세금 계산, 상태 전이/변경, 업무 흐름 등 내부 시스템 동작 방식 관련
         - None: 카테고리 불명확 시 전체 검색
         """
         cat_value = category.value if category else None
