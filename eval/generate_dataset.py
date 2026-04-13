@@ -106,7 +106,7 @@ async def generate_dataset(
         )
         return json.loads(output_path.read_text())
 
-    categories = ["hr", "ops", "benefit"]
+    categories = ["hr", "ops", "benefit", "fds", "terms"]
     dataset: list[dict[str, Any]] = []
 
     for category in categories:

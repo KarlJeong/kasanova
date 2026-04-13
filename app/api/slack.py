@@ -184,11 +184,20 @@ async def _stream_response(
 
         elif kind == "on_chat_model_stream":
             chunk = event["data"]["chunk"]
-            token = (
+            raw = (
                 chunk.content
                 if hasattr(chunk, "content")
                 else ""
             )
+            if isinstance(raw, list):
+                token = "".join(
+                    block.get("text", "")
+                    if isinstance(block, dict)
+                    else str(block)
+                    for block in raw
+                )
+            else:
+                token = raw or ""
             if token:
                 buffer += token
                 now = time.monotonic()

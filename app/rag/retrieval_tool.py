@@ -11,10 +11,12 @@ class DocCategory(str, Enum):
     hr = "hr"
     ops = "ops"
     benefit = "benefit"
+    fds = "fds"
+    terms = "terms"
 
 logger = logging.getLogger(__name__)
 
-_MIN_SCORE = 0.45
+_MIN_SCORE = 0.4
 
 
 def create_retrieval_tool(searcher: HybridSearcher) -> BaseTool:
@@ -34,6 +36,8 @@ def create_retrieval_tool(searcher: HybridSearcher) -> BaseTool:
         - "hr": 인사, 연차, 복리후생, 채용, 사내 규정, 임직원 규정, 임직원 매매 관련
         - "ops": 서비스 운영, 운영 지침, 운영 규정, 프로덕트 운영 관련
         - "benefit": 복지, 업무 장비, 건강 검진, 퇴직연금, 휴가 관련
+        - "terms": 고객에게 제공되는 약관 관련
+        - "fds": Fraud Detection System, FDS, 시장감시시스템, 실시간 거래 데이터 감시, 가공, 적출, 기준가 생성 관련
         - None: 카테고리 불명확 시 전체 검색
         """
         cat_value = category.value if category else None
@@ -74,7 +78,7 @@ def create_retrieval_tool(searcher: HybridSearcher) -> BaseTool:
             r for r in results if r["score"] >= _MIN_SCORE
         ]
         logger.info(
-            "[retrieval_tool] %d/%d건 (score >= %.1f)",
+            "[retrieval_tool] %d/%d건 (score >= %.2f)",
             len(filtered),
             len(results),
             _MIN_SCORE,
