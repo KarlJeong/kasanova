@@ -32,7 +32,8 @@ class DabsService:
 
     async def _fetch_and_summarize(self) -> list[dict[str, Any]]:
         """kasa-api에서 DABS 목록을 조회하고 식별용 요약으로 변환한다."""
-        async with httpx.AsyncClient(timeout=30) as client:
+        headers = {"User-Agent": "Mozilla/5.0 (compatible; kasanova-api/1.0)"}
+        async with httpx.AsyncClient(timeout=30, headers=headers) as client:
             resp = await client.get(DABS_API_URL)
             resp.raise_for_status()
 
