@@ -40,12 +40,9 @@ def mock_mysql_client() -> MagicMock:
 def mock_llm() -> MagicMock:
     llm = MagicMock()
     llm.ainvoke = AsyncMock(
-        side_effect=[
-            AIMessage(
-                content="SELECT COUNT(*) FROM kasa_member WHERE joined_at >= '2026-04-01'"
-            ),
-            AIMessage(content="이번 달 신규 가입 회원은 42명입니다."),
-        ]
+        return_value=AIMessage(
+            content="SELECT COUNT(*) FROM kasa_member WHERE joined_at >= '2026-04-01'"
+        )
     )
     return llm
 
@@ -69,7 +66,7 @@ def _make_tool(
 
 
 class TestHappyPath:
-    async def test_returns_summary(
+    async def test_single_scalar_result(
         self,
         mock_schema_searcher,
         mock_retrieval_tool,
@@ -85,7 +82,56 @@ class TestHappyPath:
         result = await tool.ainvoke(
             {"query": "이번 달 신규 가입 회원 수는?"}
         )
-        assert "42명" in result
+        assert result == "결과 1건: 42"
+        # SQL must not leak into tool result
+        assert "SELECT" not in result
+        assert "```" not in result
+
+    async def test_multi_row_result_is_json(
+        self,
+        mock_schema_searcher,
+        mock_retrieval_tool,
+        mock_mysql_client,
+        mock_llm,
+    ) -> None:
+        mock_mysql_client.execute_select = AsyncMock(
+            return_value=[
+                {"id": 1, "name": "a"},
+                {"id": 2, "name": "b"},
+            ]
+        )
+        tool = _make_tool(
+            mock_schema_searcher,
+            mock_retrieval_tool,
+            mock_mysql_client,
+            mock_llm,
+        )
+        result = await tool.ainvoke({"query": "목록"})
+        assert result.startswith("결과 2건:")
+        assert '"name": "a"' in result
+        assert "SELECT" not in result
+
+    async def test_truncates_at_10_rows(
+        self,
+        mock_schema_searcher,
+        mock_retrieval_tool,
+        mock_mysql_client,
+        mock_llm,
+    ) -> None:
+        mock_mysql_client.execute_select = AsyncMock(
+            return_value=[
+                {"id": i} for i in range(25)
+            ]
+        )
+        tool = _make_tool(
+            mock_schema_searcher,
+            mock_retrieval_tool,
+            mock_mysql_client,
+            mock_llm,
+        )
+        result = await tool.ainvoke({"query": "목록"})
+        assert "결과 25건" in result
+        assert "상위 10건만 표시" in result
 
     async def test_retrieval_tool_called_with_kb_category(
         self,
@@ -228,7 +274,7 @@ class TestErrorPaths:
             mock_llm,
         )
         result = await tool.ainvoke({"query": "질문"})
-        assert "42명" in result
+        assert result == "결과 1건: 42"
 
     async def test_strips_sql_code_fence(
         self,
@@ -238,12 +284,9 @@ class TestErrorPaths:
         mock_llm,
     ) -> None:
         mock_llm.ainvoke = AsyncMock(
-            side_effect=[
-                AIMessage(
-                    content="```sql\nSELECT 1\n```"
-                ),
-                AIMessage(content="결과: 1"),
-            ]
+            return_value=AIMessage(
+                content="```sql\nSELECT 1\n```"
+            )
         )
         tool = _make_tool(
             mock_schema_searcher,
