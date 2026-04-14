@@ -238,9 +238,13 @@ def create_text_to_sql_tool(
         # 스키마와 KB를 병렬로 조회한다. 지금까지는 순차 호출이라
         # 불필요한 레이턴시가 있었고, KB로 스키마를 보강하려면
         # 둘 다 완료된 시점에 합쳐야 하므로 gather가 자연스럽다.
+        #
+        # KB는 여러 문서를 반환할 수 있다(멀티 도메인 쿼리 지원).
+        # 본문 주입은 top-1만 사용해 프롬프트 크기를 유지하면서,
+        # 테이블 이름 추출은 전체 반환 문서의 합집합으로 수행한다.
         schemas_result, kb_result = await asyncio.gather(
             schema_searcher.search(query),
-            kb_searcher.fetch_best_doc(query, category="kb"),
+            kb_searcher.fetch_best_docs(query, category="kb"),
             return_exceptions=True,
         )
 
@@ -257,9 +261,9 @@ def create_text_to_sql_tool(
                 "[text_to_sql_tool] 도메인 지식 조회 실패",
                 exc_info=kb_result,
             )
-            kb_doc = None
+            kb_docs: list[dict[str, Any]] = []
         else:
-            kb_doc = kb_result
+            kb_docs = kb_result
 
         if not schemas:
             logger.info(
@@ -272,22 +276,42 @@ def create_text_to_sql_tool(
             [s["table_name"] for s in schemas],
         )
 
-        # KB 문서가 있으면 본문에서 `kasa_*` 테이블명을 추출해,
-        # 아직 스키마 후보에 없는 테이블을 이름으로 직접 조회해
-        # 합친다. 브릿지 테이블(예: kasa_offering)처럼 자체 어휘
-        # 만으로 의미 검색에 안 잡히는 테이블을 구제한다.
-        if kb_doc:
-            kb_mentioned = _extract_kb_tables(kb_doc["content"])
+        # KB 문서들이 있으면 **전체** 문서 본문에서 `kasa_*`
+        # 테이블명을 추출해 합집합을 만든다. 멀티 도메인 쿼리
+        # (예: "청약 + 보유 + 배당")에서 각 도메인이 다른 KB
+        # 문서에 속해도 테이블 커버리지가 유지되도록 한다.
+        if kb_docs:
+            kb_union: list[str] = []
+            kb_seen: set[str] = set()
+            for idx, doc in enumerate(kb_docs, 1):
+                doc_tables = _extract_kb_tables(doc["content"])
+                added_for_this_doc = 0
+                for t in doc_tables:
+                    if t in kb_seen:
+                        continue
+                    kb_seen.add(t)
+                    kb_union.append(t)
+                    added_for_this_doc += 1
+                logger.info(
+                    "[text_to_sql_tool] KB 문서 [%d/%d] %s"
+                    " (score=%.4f) → 테이블 %d개 언급,"
+                    " 신규 %d개",
+                    idx,
+                    len(kb_docs),
+                    doc["source"],
+                    doc["score"],
+                    len(doc_tables),
+                    added_for_this_doc,
+                )
+
             existing = {s["table_name"] for s in schemas}
             missing = [
-                t
-                for t in kb_mentioned
-                if t not in existing
+                t for t in kb_union if t not in existing
             ][:_MAX_KB_PINNED_TABLES]
             logger.info(
-                "[text_to_sql_tool] KB 언급 테이블 %d개, "
-                "기존 후보 외 %d개 보강 시도: %s",
-                len(kb_mentioned),
+                "[text_to_sql_tool] KB 합집합 %d개,"
+                " 기존 후보 외 %d개 보강 시도: %s",
+                len(kb_union),
                 len(missing),
                 missing,
             )
@@ -308,15 +332,23 @@ def create_text_to_sql_tool(
 
         schemas_text = _format_schemas(schemas)
 
-        if kb_doc:
-            domain_knowledge = kb_doc["content"]
+        # 본문 주입은 top-1 하나만. top-N 문서를 전부 넣으면
+        # 프롬프트가 2~3배로 부풀고 LLM이 여러 프로세스 서사를
+        # 동시에 읽으며 혼동할 수 있다. 나머지 도메인은 위에서
+        # 테이블 스키마를 이미 합쳐놓았으므로 FK·컬럼 정의로
+        # 추론 가능.
+        if kb_docs:
+            primary = kb_docs[0]
+            domain_knowledge = primary["content"]
             logger.info(
-                "[text_to_sql_tool] 도메인 지식 주입:"
-                " %s (청크 %d개, %d자, score=%.4f)",
-                kb_doc["source"],
-                kb_doc["chunk_count"],
+                "[text_to_sql_tool] 도메인 지식 본문 주입"
+                " (top-1 only): %s (청크 %d개, %d자,"
+                " score=%.4f) [총 KB 문서 %d개 중]",
+                primary["source"],
+                primary["chunk_count"],
                 len(domain_knowledge),
-                kb_doc["score"],
+                primary["score"],
+                len(kb_docs),
             )
         else:
             domain_knowledge = ""

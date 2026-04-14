@@ -96,25 +96,41 @@ class HybridSearcher:
 
         return results
 
-    async def fetch_best_doc(
+    async def fetch_best_docs(
         self,
         query: str,
         category: str | None = None,
         top_k: int = 10,
-    ) -> dict[str, Any] | None:
-        """청크 단위 하이브리드 검색으로 가장 관련 있는 문서 **하나**를
-        찾은 뒤, 해당 문서의 모든 청크를 `chunk_index` 순으로 병합해
-        단일 블록으로 반환한다.
+        top_n: int = 3,
+        gap_threshold: float = 0.7,
+    ) -> list[dict[str, Any]]:
+        """청크 단위 하이브리드 검색으로 관련 있는 문서 **여러 개**를
+        찾은 뒤, 각 문서의 모든 청크를 `chunk_index` 순으로 병합해
+        반환한다.
 
-        여러 도메인 지식 문서가 섞여 들어오는 문제를 피하기 위해
-        사용한다. 결과가 없으면 None.
+        멀티 도메인 쿼리("A를 청약하고 보유 중이며 배당금 수령한…")
+        에서는 정답 문서가 여러 개일 수 있어, 단일 top-1만 반환하면
+        일부 도메인이 완전히 누락된다. 대신 다음 규칙으로 여러 건
+        반환한다:
+
+        - 청크 hit을 doc_id 단위로 dedup(= 최고 점수만 유지)
+        - top-1 점수를 기준으로 `gap_threshold` 상대 컷오프
+          (0.7이면 top-1의 70% 이상 점수인 문서만 통과)
+        - 단, 최대 `top_n`개로 상한
+
+        단일 도메인 쿼리는 top-1이 압도적이라 컷오프를 통과하는 게
+        거의 top-1뿐이므로 기존 동작과 유사하게 유지된다.
+
+        결과가 없으면 빈 리스트 반환.
         """
         logger.info(
-            "[fetch_best_doc] query=%r category=%s top_k=%d"
-            " index=%s",
+            "[fetch_best_docs] query=%r category=%s top_k=%d"
+            " top_n=%d gap_threshold=%.2f index=%s",
             query,
             category,
             top_k,
+            top_n,
+            gap_threshold,
             self.index_name,
         )
         hits = await self.search(
@@ -122,57 +138,77 @@ class HybridSearcher:
         )
         if not hits:
             logger.info(
-                "[fetch_best_doc] hybrid search 결과 0건 → None"
+                "[fetch_best_docs] hybrid search 결과 0건 → []"
             )
-            return None
+            return []
+
+        # doc_id별 dedup (최고 점수 청크만 유지)
+        seen_doc_ids: set[str] = set()
+        unique_hits: list[dict[str, Any]] = []
+        for h in hits:
+            if h["doc_id"] in seen_doc_ids:
+                continue
+            seen_doc_ids.add(h["doc_id"])
+            unique_hits.append(h)
 
         logger.info(
-            "[fetch_best_doc] hybrid 상위 %d건: %s",
-            len(hits),
+            "[fetch_best_docs] unique 문서 %d개 (상위 5): %s",
+            len(unique_hits),
             [
                 (h["doc_id"], round(h["score"], 4))
-                for h in hits[:5]
+                for h in unique_hits[:5]
             ],
         )
 
-        best = hits[0]
-        best_doc_id = best["doc_id"]
-        best_score = best["score"]
-        best_source = best.get("source")
+        # gap-based cutoff
+        top_score = unique_hits[0]["score"]
+        cutoff = top_score * gap_threshold
+        selected = [
+            h for h in unique_hits if h["score"] >= cutoff
+        ][:top_n]
         logger.info(
-            "[fetch_best_doc] top-1 선정: doc_id=%r"
-            " source=%r score=%.4f",
-            best_doc_id,
-            best_source,
-            best_score,
+            "[fetch_best_docs] gap 컷오프(top=%.4f"
+            " × %.2f = %.4f) + top_n=%d 통과: %d개",
+            top_score,
+            gap_threshold,
+            cutoff,
+            top_n,
+            len(selected),
         )
 
-        chunks = await self.fetch_by_doc_id(best_doc_id)
-        if not chunks:
-            logger.warning(
-                "[fetch_best_doc] fetch_by_doc_id(%r) 결과 0건."
-                " 이는 보통 doc_id 필드 매핑 문제(keyword"
-                " subfield 없음) 또는 인덱스 간 값 불일치를"
-                " 의미한다. 인덱스=%s",
-                best_doc_id,
-                self.index_name,
+        results: list[dict[str, Any]] = []
+        for sel in selected:
+            doc_id = sel["doc_id"]
+            chunks = await self.fetch_by_doc_id(doc_id)
+            if not chunks:
+                logger.warning(
+                    "[fetch_best_docs] fetch_by_doc_id(%r)"
+                    " 결과 0건. 스킵. 인덱스=%s",
+                    doc_id,
+                    self.index_name,
+                )
+                continue
+            merged_content = "\n".join(
+                c["content"] for c in chunks
             )
-            return None
+            results.append(
+                {
+                    "doc_id": doc_id,
+                    "content": merged_content,
+                    "source": chunks[0]["source"],
+                    "score": sel["score"],
+                    "chunk_count": len(chunks),
+                }
+            )
+            logger.info(
+                "[fetch_best_docs] 포함: %s"
+                " (score=%.4f, 청크 %d개)",
+                doc_id,
+                sel["score"],
+                len(chunks),
+            )
 
-        logger.info(
-            "[fetch_best_doc] doc_id=%r → 청크 %d개 병합",
-            best_doc_id,
-            len(chunks),
-        )
-
-        merged_content = "\n".join(c["content"] for c in chunks)
-        return {
-            "doc_id": best_doc_id,
-            "content": merged_content,
-            "source": chunks[0]["source"],
-            "score": best_score,
-            "chunk_count": len(chunks),
-        }
+        return results
 
     async def fetch_by_doc_id(
         self, doc_id: str

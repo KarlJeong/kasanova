@@ -24,18 +24,20 @@ def mock_schema_searcher() -> MagicMock:
 @pytest.fixture
 def mock_kb_searcher() -> MagicMock:
     searcher = MagicMock()
-    searcher.fetch_best_doc = AsyncMock(
-        return_value={
-            "doc_id": "offering_subscription_process",
-            "content": (
-                "관련 테이블: kasa_offering,"
-                " kasa_offering_subscription,"
-                " kasa_subscription_transaction"
-            ),
-            "source": "offering_subscription_process.md",
-            "score": 0.82,
-            "chunk_count": 3,
-        }
+    searcher.fetch_best_docs = AsyncMock(
+        return_value=[
+            {
+                "doc_id": "offering_subscription_process",
+                "content": (
+                    "관련 테이블: kasa_offering,"
+                    " kasa_offering_subscription,"
+                    " kasa_subscription_transaction"
+                ),
+                "source": "offering_subscription_process.md",
+                "score": 0.82,
+                "chunk_count": 3,
+            }
+        ]
     )
     return searcher
 
@@ -160,9 +162,8 @@ class TestHappyPath:
             mock_llm,
         )
         await tool.ainvoke({"query": "질문"})
-        mock_kb_searcher.fetch_best_doc.assert_awaited_once()
-        call = mock_kb_searcher.fetch_best_doc.call_args
-        # query는 positional 또는 keyword로 전달될 수 있음
+        mock_kb_searcher.fetch_best_docs.assert_awaited_once()
+        call = mock_kb_searcher.fetch_best_docs.call_args
         passed_query = (
             call.args[0] if call.args else call.kwargs["query"]
         )
@@ -195,8 +196,8 @@ class TestHappyPath:
         mock_mysql_client,
         mock_llm,
     ) -> None:
-        mock_kb_searcher.fetch_best_doc = AsyncMock(
-            return_value=None
+        mock_kb_searcher.fetch_best_docs = AsyncMock(
+            return_value=[]
         )
         tool = _make_tool(
             mock_schema_searcher,
@@ -292,8 +293,139 @@ class TestHappyPath:
         )
         await tool.ainvoke({"query": "질문"})
         mock_schema_searcher.fetch_schemas_by_names.assert_not_awaited()
+
+    async def test_multi_doc_table_union(
+        self,
+        mock_schema_searcher,
+        mock_kb_searcher,
+        mock_mysql_client,
+        mock_llm,
+    ) -> None:
+        """멀티 도메인 쿼리에서 여러 KB 문서가 돌아오면 각 문서의
+        테이블명을 합집합으로 수집해 스키마 보강에 사용한다."""
+        mock_kb_searcher.fetch_best_docs = AsyncMock(
+            return_value=[
+                {
+                    "doc_id": "offering_subscription_process",
+                    "content": (
+                        "관련 테이블: kasa_offering,"
+                        " kasa_offering_subscription"
+                    ),
+                    "source": "offering_subscription_process.md",
+                    "score": 0.72,
+                    "chunk_count": 5,
+                },
+                {
+                    "doc_id": "dividend_process",
+                    "content": (
+                        "관련 테이블: kasa_dividend,"
+                        " kasa_dividend_history"
+                    ),
+                    "source": "dividend_process.md",
+                    "score": 0.65,
+                    "chunk_count": 4,
+                },
+                {
+                    "doc_id": "market_trading_process",
+                    "content": (
+                        "관련 테이블: kasa_trading_order"
+                    ),
+                    "source": "market_trading_process.md",
+                    "score": 0.55,
+                    "chunk_count": 3,
+                },
+            ]
+        )
+        mock_schema_searcher.fetch_schemas_by_names = AsyncMock(
+            return_value=[
+                {
+                    "table_name": "kasa_offering",
+                    "schema": "...",
+                },
+                {
+                    "table_name": "kasa_offering_subscription",
+                    "schema": "...",
+                },
+                {
+                    "table_name": "kasa_dividend",
+                    "schema": "...",
+                },
+                {
+                    "table_name": "kasa_dividend_history",
+                    "schema": "...",
+                },
+                {
+                    "table_name": "kasa_trading_order",
+                    "schema": "...",
+                },
+            ]
+        )
+
+        tool = _make_tool(
+            mock_schema_searcher,
+            mock_kb_searcher,
+            mock_mysql_client,
+            mock_llm,
+        )
+        await tool.ainvoke({"query": "질문"})
+
+        # 세 KB 문서 테이블 합집합이 보강 요청으로 전달돼야 함
+        mock_schema_searcher.fetch_schemas_by_names.assert_awaited_once()
+        passed = (
+            mock_schema_searcher.fetch_schemas_by_names.call_args.args[0]
+        )
+        # 청약 도메인
+        assert "kasa_offering" in passed
+        assert "kasa_offering_subscription" in passed
+        # 배당 도메인
+        assert "kasa_dividend" in passed
+        assert "kasa_dividend_history" in passed
+        # 거래 도메인
+        assert "kasa_trading_order" in passed
+        # 중복 없음
+        assert len(passed) == len(set(passed))
+
+    async def test_multi_doc_only_top1_content_injected(
+        self,
+        mock_schema_searcher,
+        mock_kb_searcher,
+        mock_mysql_client,
+        mock_llm,
+    ) -> None:
+        """KB 여러 문서가 돌아와도 본문 주입은 top-1만. top-2,
+        top-3 문서 본문은 프롬프트에 포함되지 않아야 한다."""
+        mock_kb_searcher.fetch_best_docs = AsyncMock(
+            return_value=[
+                {
+                    "doc_id": "offering_subscription_process",
+                    "content": "SUBSCRIPTION_ONLY_SENTINEL",
+                    "source": "offering_subscription_process.md",
+                    "score": 0.72,
+                    "chunk_count": 5,
+                },
+                {
+                    "doc_id": "dividend_process",
+                    "content": "DIVIDEND_ONLY_SENTINEL",
+                    "source": "dividend_process.md",
+                    "score": 0.65,
+                    "chunk_count": 4,
+                },
+            ]
+        )
+
+        tool = _make_tool(
+            mock_schema_searcher,
+            mock_kb_searcher,
+            mock_mysql_client,
+            mock_llm,
+        )
+        await tool.ainvoke({"query": "질문"})
+
         human_content = mock_llm.ainvoke.call_args.args[0][-1][1]
-        assert "(없음)" in human_content
+        # top-1 본문은 주입됨
+        assert "SUBSCRIPTION_ONLY_SENTINEL" in human_content
+        # top-2 본문은 주입되지 않음 (프롬프트 비대화 방지)
+        assert "DIVIDEND_ONLY_SENTINEL" not in human_content
 
 
 class TestErrorPaths:
@@ -405,7 +537,7 @@ class TestErrorPaths:
         mock_mysql_client,
         mock_llm,
     ) -> None:
-        mock_kb_searcher.fetch_best_doc = AsyncMock(
+        mock_kb_searcher.fetch_best_docs = AsyncMock(
             side_effect=RuntimeError("kb down")
         )
         tool = _make_tool(
