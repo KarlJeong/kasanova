@@ -24,6 +24,32 @@ _CANNOT_ANSWER = "조회할 수 없습니다"
 _NO_DATA = "조회된 데이터가 없습니다"
 _MAX_PREVIEW_ROWS = 10
 
+_SQL_SYSTEM_PROMPT = """\
+너는 사내 MySQL 8.x 전용 Text-to-SQL 생성기다.
+사용자의 자연어 질문과 함께 주어진 테이블 스키마만을 근거로 SQL을 만든다.
+
+[출력 계약 — 반드시 준수]
+- 성공 시: 코드 펜스·설명·주석·마크다운 없이 `SELECT`로 시작하는 SQL 한 문장만 출력한다.
+- 스키마만으로 답할 수 없으면 정확히 대문자 `UNKNOWN` 한 단어만 출력한다.
+- 접두/접미 텍스트, 인사말, 가정 설명, 여러 문장 출력 금지.
+
+[SQL 규칙]
+- `SELECT`만 허용. `INSERT`·`UPDATE`·`DELETE`·`DROP`·`ALTER`·`TRUNCATE` 등 DDL/DML 전면 금지.
+- 주어진 스키마에 존재하는 테이블명·컬럼명만 사용한다. 임의 추측·생성 금지.
+- JOIN은 각 테이블 블록의 `관계:` 섹션에 명시된 FK 조건으로만 수행한다.
+- `SELECT *` 금지. 컬럼을 명시적으로 나열한다.
+- "목록"·"최근"·"상위" 류 질문은 `ORDER BY`와 적절한 `LIMIT`을 반드시 포함한다.
+- datetime 비교는 KST 기준이며, `datetime(6)` 컬럼은 문자열 리터럴(예: '2026-04-14 00:00:00')로 비교한다.
+- 문자열 매칭은 기본적으로 `=`을 사용하고, 부분 일치가 필요한 경우에만 `LIKE`를 사용한다.
+- 집계 질문은 SELECT 절의 non-aggregate 컬럼을 모두 `GROUP BY`에 포함한다.
+- 가독성을 위해 여러 테이블을 다룰 때 테이블 별칭을 사용한다.
+- MySQL 8.x 방언만 사용한다. 타 DB 방언 함수(`DATE_TRUNC`, `TO_DATE` 등) 금지.
+
+[판단 규칙]
+- 필요한 테이블·컬럼이 주어진 스키마에 없으면 추측하지 말고 `UNKNOWN`만 출력한다.
+- 질문이 모호해도 가장 합리적인 해석 하나로 SQL을 생성한다. 되묻거나 복수 해석을 나열하지 않는다.
+"""
+
 
 def _strip_code_fence(text: str) -> str:
     return _CODE_FENCE_PATTERN.sub("", text).strip()
@@ -42,9 +68,7 @@ def _validate_sql(sql: str) -> bool:
 
 
 def _format_schemas(schemas: list[dict]) -> str:
-    return "\n\n".join(
-        f"{s['table_name']}:\n{s['schema']}" for s in schemas
-    )
+    return "\n\n---\n\n".join(s["schema"] for s in schemas)
 
 
 def _build_sql_prompt(
@@ -54,18 +78,15 @@ def _build_sql_prompt(
         domain_knowledge.strip() if domain_knowledge else "(없음)"
     )
     return (
-        "[스키마]\n"
+        "## 사용 가능한 스키마\n"
         f"{schemas_text}\n\n"
-        "[도메인 지식]\n"
+        "## 도메인 지식\n"
         f"{kb_block}\n\n"
-        "[질문]\n"
+        "## 질문\n"
         f"{query}\n\n"
-        "규칙:\n"
-        "- SELECT만 허용\n"
-        "- 주어진 스키마의 테이블명/컬럼명만 사용\n"
-        "- FK 관계에 명시된 조건으로만 JOIN\n"
-        "- 설명 없이 SQL만 출력\n"
-        "- 스키마만으로 답할 수 없으면 UNKNOWN 출력"
+        "위 스키마에 정의된 테이블·컬럼만 사용해 질문에 답하는 "
+        "MySQL SELECT 문 하나만 출력하라. "
+        "스키마만으로 답할 수 없으면 정확히 `UNKNOWN`만 출력하라."
     )
 
 
@@ -155,12 +176,17 @@ def create_text_to_sql_tool(
         #     domain_knowledge = ""
         domain_knowledge = ""
 
-        sql_prompt = _build_sql_prompt(
+        sql_user_prompt = _build_sql_prompt(
             schemas_text,
             str(domain_knowledge or ""),
             query,
         )
-        sql_response = await llm.ainvoke(sql_prompt)
+        sql_response = await llm.ainvoke(
+            [
+                ("system", _SQL_SYSTEM_PROMPT),
+                ("human", sql_user_prompt),
+            ]
+        )
         raw_response = _extract_llm_text(sql_response)
         logger.info(
             "[text_to_sql_tool] LLM 원본 응답: %s", raw_response
