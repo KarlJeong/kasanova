@@ -98,7 +98,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             schema_hybrid,
             pinned_doc_ids=[
                 "kasa_ledger_dabs",
-                "kasa_ledger_dabs_account",
             ],
             excluded_doc_ids=["kasa_personal_data"],
         )
