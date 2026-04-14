@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import re
@@ -20,10 +21,12 @@ _CODE_FENCE_PATTERN = re.compile(
     r"^```(?:sql)?\s*\n?|\n?```\s*$",
     re.IGNORECASE | re.MULTILINE,
 )
+_KB_TABLE_PATTERN = re.compile(r"\bkasa_[a-z0-9_]+")
 
 _CANNOT_ANSWER = "조회할 수 없습니다"
 _NO_DATA = "조회된 데이터가 없습니다"
 _MAX_PREVIEW_ROWS = 10
+_MAX_KB_PINNED_TABLES = 8
 
 _SQL_SYSTEM_PROMPT = """\
 너는 사내 MySQL 8.x 전용 Text-to-SQL 생성기다.
@@ -91,6 +94,26 @@ def _validate_sql(sql: str) -> bool:
 
 def _format_schemas(schemas: list[dict]) -> str:
     return "\n\n---\n\n".join(s["schema"] for s in schemas)
+
+
+def _extract_kb_tables(content: str) -> list[str]:
+    """KB 문서 본문에서 `kasa_*` 테이블명을 등장 순서대로 dedup.
+
+    KB 문서의 "관련 테이블" 섹션뿐 아니라 본문 어디에든 등장하는
+    테이블명을 모두 후보로 본다. 오탐(예: 코드 블록·예시에 등장
+    하는 유사 식별자)은 어차피 `fetch_by_doc_id` 단계에서 실제
+    스키마 인덱스 존재 여부로 필터링되므로, 추출 단계는 넉넉하게
+    가져간다.
+    """
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for match in _KB_TABLE_PATTERN.finditer(content):
+        name = match.group(0)
+        if name in seen:
+            continue
+        seen.add(name)
+        ordered.append(name)
+    return ordered
 
 
 def _build_sql_prompt(
@@ -212,31 +235,78 @@ def create_text_to_sql_tool(
             literals,
         )
 
-        schemas = await schema_searcher.search(query)
+        # 스키마와 KB를 병렬로 조회한다. 지금까지는 순차 호출이라
+        # 불필요한 레이턴시가 있었고, KB로 스키마를 보강하려면
+        # 둘 다 완료된 시점에 합쳐야 하므로 gather가 자연스럽다.
+        schemas_result, kb_result = await asyncio.gather(
+            schema_searcher.search(query),
+            kb_searcher.fetch_best_doc(query, category="kb"),
+            return_exceptions=True,
+        )
+
+        if isinstance(schemas_result, BaseException):
+            logger.exception(
+                "[text_to_sql_tool] 스키마 조회 실패",
+                exc_info=schemas_result,
+            )
+            return _CANNOT_ANSWER
+        schemas: list[dict[str, Any]] = schemas_result
+
+        if isinstance(kb_result, BaseException):
+            logger.exception(
+                "[text_to_sql_tool] 도메인 지식 조회 실패",
+                exc_info=kb_result,
+            )
+            kb_doc = None
+        else:
+            kb_doc = kb_result
+
         if not schemas:
             logger.info(
                 "[text_to_sql_tool] 관련 스키마 없음"
             )
             return _CANNOT_ANSWER
         logger.info(
-            "[text_to_sql_tool] 스키마 %d개 후보: %s",
+            "[text_to_sql_tool] 스키마 %d개 후보 (RAG): %s",
             len(schemas),
             [s["table_name"] for s in schemas],
         )
-        schemas_text = _format_schemas(schemas)
 
-        # 도메인 지식: top-1 문서만 통째로 주입.
-        # 과거에는 retrieval_tool을 호출했으나 여러 kb 문서의 청크가
-        # 뒤섞여 전달되는 문제가 있어, 문서 단위 승격으로 대체했다.
-        try:
-            kb_doc = await kb_searcher.fetch_best_doc(
-                query, category="kb"
+        # KB 문서가 있으면 본문에서 `kasa_*` 테이블명을 추출해,
+        # 아직 스키마 후보에 없는 테이블을 이름으로 직접 조회해
+        # 합친다. 브릿지 테이블(예: kasa_offering)처럼 자체 어휘
+        # 만으로 의미 검색에 안 잡히는 테이블을 구제한다.
+        if kb_doc:
+            kb_mentioned = _extract_kb_tables(kb_doc["content"])
+            existing = {s["table_name"] for s in schemas}
+            missing = [
+                t
+                for t in kb_mentioned
+                if t not in existing
+            ][:_MAX_KB_PINNED_TABLES]
+            logger.info(
+                "[text_to_sql_tool] KB 언급 테이블 %d개, "
+                "기존 후보 외 %d개 보강 시도: %s",
+                len(kb_mentioned),
+                len(missing),
+                missing,
             )
-        except Exception:
-            logger.exception(
-                "[text_to_sql_tool] 도메인 지식 조회 실패"
-            )
-            kb_doc = None
+            if missing:
+                extra = (
+                    await schema_searcher.fetch_schemas_by_names(
+                        missing
+                    )
+                )
+                if extra:
+                    schemas = schemas + extra
+                    logger.info(
+                        "[text_to_sql_tool] KB 기반 보강 후"
+                        " 스키마 %d개: %s",
+                        len(schemas),
+                        [s["table_name"] for s in schemas],
+                    )
+
+        schemas_text = _format_schemas(schemas)
 
         if kb_doc:
             domain_knowledge = kb_doc["content"]

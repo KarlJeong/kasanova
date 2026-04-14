@@ -15,6 +15,9 @@ def mock_schema_searcher() -> MagicMock:
             },
         ]
     )
+    searcher.fetch_schemas_by_names = AsyncMock(
+        return_value=[]
+    )
     return searcher
 
 
@@ -24,7 +27,11 @@ def mock_kb_searcher() -> MagicMock:
     searcher.fetch_best_doc = AsyncMock(
         return_value={
             "doc_id": "offering_subscription_process",
-            "content": "청약 = kasa_offering_subscription 사용",
+            "content": (
+                "관련 테이블: kasa_offering,"
+                " kasa_offering_subscription,"
+                " kasa_subscription_transaction"
+            ),
             "source": "offering_subscription_process.md",
             "score": 0.82,
             "chunk_count": 3,
@@ -177,10 +184,9 @@ class TestHappyPath:
         )
         await tool.ainvoke({"query": "질문"})
         llm_messages = mock_llm.ainvoke.call_args.args[0]
-        # system + human
         human_content = llm_messages[-1][1]
-        assert "kasa_offering_subscription 사용" in human_content
         assert "## 도메인 참고" in human_content
+        assert "kasa_offering_subscription" in human_content
 
     async def test_no_kb_match_proceeds_without_domain(
         self,
@@ -200,6 +206,92 @@ class TestHappyPath:
         )
         result = await tool.ainvoke({"query": "질문"})
         assert result == "결과 1건: 42"
+        mock_schema_searcher.fetch_schemas_by_names.assert_not_awaited()
+
+    async def test_kb_augments_schema_with_missing_tables(
+        self,
+        mock_schema_searcher,
+        mock_kb_searcher,
+        mock_mysql_client,
+        mock_llm,
+    ) -> None:
+        """KB 문서가 언급한 테이블 중 스키마 후보에 없는 것을
+        fetch_schemas_by_names로 가져와 후보에 합쳐야 한다."""
+        mock_schema_searcher.fetch_schemas_by_names = AsyncMock(
+            return_value=[
+                {
+                    "table_name": "kasa_offering",
+                    "schema": "테이블명: kasa_offering\n"
+                    "컬럼: id, dabs_code",
+                },
+                {
+                    "table_name": "kasa_offering_subscription",
+                    "schema": "테이블명: kasa_offering_subscription\n"
+                    "컬럼: id, member_id, offering_id",
+                },
+                {
+                    "table_name": "kasa_subscription_transaction",
+                    "schema": "테이블명: kasa_subscription_transaction\n"
+                    "컬럼: id, subscription_id",
+                },
+            ]
+        )
+
+        tool = _make_tool(
+            mock_schema_searcher,
+            mock_kb_searcher,
+            mock_mysql_client,
+            mock_llm,
+        )
+        await tool.ainvoke({"query": "질문"})
+
+        mock_schema_searcher.fetch_schemas_by_names.assert_awaited_once()
+        passed = (
+            mock_schema_searcher.fetch_schemas_by_names.call_args.args[0]
+        )
+        assert "kasa_offering" in passed
+        assert "kasa_offering_subscription" in passed
+        assert "kasa_subscription_transaction" in passed
+        # 이미 스키마 후보에 있는 테이블은 재조회하지 않음
+        assert "kasa_member" not in passed
+
+        human_content = mock_llm.ainvoke.call_args.args[0][-1][1]
+        assert "kasa_offering" in human_content
+        assert "dabs_code" in human_content
+
+    async def test_kb_augmentation_skipped_when_all_present(
+        self,
+        mock_schema_searcher,
+        mock_kb_searcher,
+        mock_mysql_client,
+        mock_llm,
+    ) -> None:
+        """KB가 언급한 테이블이 이미 전부 스키마 후보에 있으면
+        fetch_schemas_by_names를 호출하지 않는다."""
+        mock_schema_searcher.search = AsyncMock(
+            return_value=[
+                {
+                    "table_name": "kasa_offering",
+                    "schema": "...",
+                },
+                {
+                    "table_name": "kasa_offering_subscription",
+                    "schema": "...",
+                },
+                {
+                    "table_name": "kasa_subscription_transaction",
+                    "schema": "...",
+                },
+            ]
+        )
+        tool = _make_tool(
+            mock_schema_searcher,
+            mock_kb_searcher,
+            mock_mysql_client,
+            mock_llm,
+        )
+        await tool.ainvoke({"query": "질문"})
+        mock_schema_searcher.fetch_schemas_by_names.assert_not_awaited()
         human_content = mock_llm.ainvoke.call_args.args[0][-1][1]
         assert "(없음)" in human_content
 
@@ -349,3 +441,45 @@ class TestErrorPaths:
         )
         assert executed.strip().startswith("SELECT")
         assert "```" not in executed
+
+
+class TestExtractKbTables:
+    def test_extracts_comma_separated_list(self) -> None:
+        from app.rag.text_to_sql_tool import _extract_kb_tables
+
+        content = (
+            "관련 테이블: kasa_offering, kasa_offering_subscription, "
+            "kasa_subscription_transaction"
+        )
+        assert _extract_kb_tables(content) == [
+            "kasa_offering",
+            "kasa_offering_subscription",
+            "kasa_subscription_transaction",
+        ]
+
+    def test_dedups_repeated_mentions(self) -> None:
+        from app.rag.text_to_sql_tool import _extract_kb_tables
+
+        content = (
+            "kasa_member 회원 정보.\n"
+            "가입 이력은 kasa_member 테이블에서 관리.\n"
+            "kasa_offering 공모 정보."
+        )
+        assert _extract_kb_tables(content) == [
+            "kasa_member",
+            "kasa_offering",
+        ]
+
+    def test_ignores_non_kasa_tokens(self) -> None:
+        from app.rag.text_to_sql_tool import _extract_kb_tables
+
+        content = (
+            "청약(subscription) 프로세스에서 kasa_offering이 생성된다.\n"
+            "not_kasa_foo 는 무시."
+        )
+        assert _extract_kb_tables(content) == ["kasa_offering"]
+
+    def test_empty_returns_empty(self) -> None:
+        from app.rag.text_to_sql_tool import _extract_kb_tables
+
+        assert _extract_kb_tables("") == []

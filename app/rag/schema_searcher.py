@@ -112,3 +112,51 @@ class SchemaSearcher:
             }
             for hit in hits
         ]
+
+    async def fetch_schemas_by_names(
+        self, table_names: list[str]
+    ) -> list[dict[str, Any]]:
+        """테이블명 리스트를 받아, 각각의 스키마 문서 전체를
+        `chunk_index` 순으로 병합해 반환한다.
+
+        스키마 인덱스에서 `doc_id`는 곧 테이블명이다. 정적
+        `pinned_doc_ids` 주입 로직을 다른 호출자(예: KB 기반
+        동적 pinning)가 재사용할 수 있도록 분리했다.
+
+        존재하지 않는 테이블명이나 제외 대상은 조용히 스킵한다.
+        """
+        results: list[dict[str, Any]] = []
+        for table_name in table_names:
+            if table_name in self.excluded_doc_ids:
+                logger.info(
+                    "[schema_searcher] 이름 조회 제외:"
+                    " %s",
+                    table_name,
+                )
+                continue
+            chunks = await self.hybrid.fetch_by_doc_id(
+                table_name
+            )
+            if not chunks:
+                logger.warning(
+                    "[schema_searcher] 이름 조회 실패:"
+                    " %s",
+                    table_name,
+                )
+                continue
+            merged_content = "\n".join(
+                c["content"] for c in chunks
+            )
+            results.append(
+                {
+                    "table_name": table_name,
+                    "schema": merged_content,
+                }
+            )
+            logger.info(
+                "[schema_searcher] 이름 조회 성공:"
+                " %s (청크 %d개)",
+                table_name,
+                len(chunks),
+            )
+        return results
