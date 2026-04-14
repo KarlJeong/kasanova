@@ -177,13 +177,24 @@ class HybridSearcher:
     async def fetch_by_doc_id(
         self, doc_id: str
     ) -> list[dict[str, Any]]:
-        """doc_id의 모든 청크를 chunk_index 순으로 반환."""
+        """doc_id의 모든 청크를 chunk_index 순으로 반환.
+
+        인덱스마다 `doc_id`의 매핑이 plain `keyword`인 경우도 있고
+        `text` + `.keyword` 서브필드 조합인 경우도 있어, 두 경로를
+        모두 시도한다.
+        """
         response = await self.os_client.search(
             index=self.index_name,
             body={
                 "size": 100,
                 "query": {
-                    "term": {"doc_id.keyword": doc_id}
+                    "bool": {
+                        "should": [
+                            {"term": {"doc_id": doc_id}},
+                            {"term": {"doc_id.keyword": doc_id}},
+                        ],
+                        "minimum_should_match": 1,
+                    }
                 },
                 "sort": [{"chunk_index": "asc"}],
             },
