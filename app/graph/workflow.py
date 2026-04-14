@@ -32,7 +32,7 @@ def build_workflow(
     dabs_summary_list = create_dabs_summary_list_tool(dabs_service)
     text_to_sql = create_text_to_sql_tool(
         schema_searcher=schema_searcher,
-        retrieval_tool=retrieval_tool,
+        kb_searcher=searcher,
         mysql_client=mysql_client,
         llm=llm,
     )

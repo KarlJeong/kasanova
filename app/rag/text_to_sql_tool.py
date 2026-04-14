@@ -8,6 +8,7 @@ from langchain_core.tools import BaseTool, tool
 
 from app.db.mysql_client import MySQLClient
 from app.rag.schema_searcher import SchemaSearcher
+from app.rag.searcher import HybridSearcher
 
 logger = logging.getLogger(__name__)
 
@@ -108,7 +109,7 @@ def _build_sql_prompt(
     return (
         "## 사용 가능한 스키마\n"
         f"{schemas_text}\n\n"
-        "## 도메인 지식\n"
+        "## 도메인 참고 (질문과 무관하면 무시하라)\n"
         f"{kb_block}\n\n"
         "## 질문\n"
         f"{query}\n\n"
@@ -118,6 +119,8 @@ def _build_sql_prompt(
         "MySQL SELECT 문 하나만 출력하라. "
         "질문에 명시된 식별자·코드·이름·날짜 등은 위 리터럴 목록에 "
         "있는 값을 그대로 사용한다. "
+        "도메인 참고 블록은 테이블·JOIN 선택이 모호할 때만 참고용으로 "
+        "활용하고, 질문과 관련 없어 보이면 완전히 무시하라. "
         "스키마만으로 답할 수 없으면 정확히 `UNKNOWN`만 출력하라."
     )
 
@@ -152,11 +155,15 @@ def _extract_llm_text(response) -> str:
 
 def create_text_to_sql_tool(
     schema_searcher: SchemaSearcher,
-    retrieval_tool: BaseTool,
+    kb_searcher: HybridSearcher,
     mysql_client: MySQLClient,
     llm: BaseChatModel,
 ) -> BaseTool:
-    """Text-to-SQL LangGraph 도구를 생성한다."""
+    """Text-to-SQL LangGraph 도구를 생성한다.
+
+    kb_searcher: 도메인 지식(category="kb") 검색에 사용한다.
+    청크 단위 하이브리드 검색으로 top-1 문서를 찾아 통째로 주입한다.
+    """
 
     @tool
     async def text_to_sql_tool(
@@ -213,17 +220,34 @@ def create_text_to_sql_tool(
         )
         schemas_text = _format_schemas(schemas)
 
-        # 도메인 지식 조회는 단순 조회 질문에서 노이즈로 작용해 일단 비활성화.
-        # try:
-        #     domain_knowledge = await retrieval_tool.ainvoke(
-        #         {"query": query, "category": "kb"}
-        #     )
-        # except Exception:
-        #     logger.exception(
-        #         "[text_to_sql_tool] 도메인 지식 조회 실패"
-        #     )
-        #     domain_knowledge = ""
-        domain_knowledge = ""
+        # 도메인 지식: top-1 문서만 통째로 주입.
+        # 과거에는 retrieval_tool을 호출했으나 여러 kb 문서의 청크가
+        # 뒤섞여 전달되는 문제가 있어, 문서 단위 승격으로 대체했다.
+        try:
+            kb_doc = await kb_searcher.fetch_best_doc(
+                query, category="kb"
+            )
+        except Exception:
+            logger.exception(
+                "[text_to_sql_tool] 도메인 지식 조회 실패"
+            )
+            kb_doc = None
+
+        if kb_doc:
+            domain_knowledge = kb_doc["content"]
+            logger.info(
+                "[text_to_sql_tool] 도메인 지식 주입:"
+                " %s (청크 %d개, %d자, score=%.4f)",
+                kb_doc["source"],
+                kb_doc["chunk_count"],
+                len(domain_knowledge),
+                kb_doc["score"],
+            )
+        else:
+            domain_knowledge = ""
+            logger.info(
+                "[text_to_sql_tool] 도메인 지식 없음"
+            )
 
         sql_user_prompt = _build_sql_prompt(
             schemas_text,

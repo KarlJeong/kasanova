@@ -93,6 +93,40 @@ class HybridSearcher:
 
         return results
 
+    async def fetch_best_doc(
+        self,
+        query: str,
+        category: str | None = None,
+        top_k: int = 10,
+    ) -> dict[str, Any] | None:
+        """청크 단위 하이브리드 검색으로 가장 관련 있는 문서 **하나**를
+        찾은 뒤, 해당 문서의 모든 청크를 `chunk_index` 순으로 병합해
+        단일 블록으로 반환한다.
+
+        여러 도메인 지식 문서가 섞여 들어오는 문제를 피하기 위해
+        사용한다. 결과가 없으면 None.
+        """
+        hits = await self.search(
+            query, top_k=top_k, category=category
+        )
+        if not hits:
+            return None
+
+        best_doc_id = hits[0]["doc_id"]
+        best_score = hits[0]["score"]
+        chunks = await self.fetch_by_doc_id(best_doc_id)
+        if not chunks:
+            return None
+
+        merged_content = "\n".join(c["content"] for c in chunks)
+        return {
+            "doc_id": best_doc_id,
+            "content": merged_content,
+            "source": chunks[0]["source"],
+            "score": best_score,
+            "chunk_count": len(chunks),
+        }
+
     async def fetch_by_doc_id(
         self, doc_id: str
     ) -> list[dict[str, Any]]:
