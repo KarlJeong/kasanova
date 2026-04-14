@@ -1,7 +1,10 @@
 import asyncio
+import logging
 from typing import Any
 
 from app.rag.embedder import Embedder
+
+logger = logging.getLogger(__name__)
 
 
 class HybridSearcher:
@@ -106,17 +109,61 @@ class HybridSearcher:
         여러 도메인 지식 문서가 섞여 들어오는 문제를 피하기 위해
         사용한다. 결과가 없으면 None.
         """
+        logger.info(
+            "[fetch_best_doc] query=%r category=%s top_k=%d"
+            " index=%s",
+            query,
+            category,
+            top_k,
+            self.index_name,
+        )
         hits = await self.search(
             query, top_k=top_k, category=category
         )
         if not hits:
+            logger.info(
+                "[fetch_best_doc] hybrid search 결과 0건 → None"
+            )
             return None
 
-        best_doc_id = hits[0]["doc_id"]
-        best_score = hits[0]["score"]
+        logger.info(
+            "[fetch_best_doc] hybrid 상위 %d건: %s",
+            len(hits),
+            [
+                (h["doc_id"], round(h["score"], 4))
+                for h in hits[:5]
+            ],
+        )
+
+        best = hits[0]
+        best_doc_id = best["doc_id"]
+        best_score = best["score"]
+        best_source = best.get("source")
+        logger.info(
+            "[fetch_best_doc] top-1 선정: doc_id=%r"
+            " source=%r score=%.4f",
+            best_doc_id,
+            best_source,
+            best_score,
+        )
+
         chunks = await self.fetch_by_doc_id(best_doc_id)
         if not chunks:
+            logger.warning(
+                "[fetch_best_doc] fetch_by_doc_id(%r) 결과 0건."
+                " 이는 보통 doc_id 필드 매핑 문제(keyword"
+                " subfield 없음) 또는 인덱스 간 값 불일치를"
+                " 의미한다. 인덱스=%s",
+                best_doc_id,
+                self.index_name,
+            )
             return None
+
+        logger.info(
+            "[fetch_best_doc] doc_id=%r → 청크 %d개 병합",
+            best_doc_id,
+            len(chunks),
+        )
 
         merged_content = "\n".join(c["content"] for c in chunks)
         return {
