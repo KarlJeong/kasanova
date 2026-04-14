@@ -92,7 +92,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             os_client=os_client,
             embedder=embedder,
             index_name=schema_index_name,
-            search_pipeline="weighted-rrf-pipeline",
+            search_pipeline="weighted-mean-pipeline",
         )
         schema_searcher = SchemaSearcher(
             schema_hybrid,
