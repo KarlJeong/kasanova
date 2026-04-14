@@ -27,6 +27,7 @@ class Embedder:
     ) -> None:
         path = _resolve_model_path(model_name)
         self.model = SentenceTransformer(str(path))
+        print("max_seq_length:", self.model.max_seq_length)
 
     def encode(
         self, texts: list[str], batch_size: int = 32

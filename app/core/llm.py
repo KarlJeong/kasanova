@@ -23,6 +23,13 @@ def get_llm() -> BaseChatModel:
         return ChatAnthropic(
             api_key=s.llm_api_key, model=s.llm_model_name
         )
+    elif s.llm_provider == "google":
+        from langchain_google_genai import ChatGoogleGenerativeAI
+
+        return ChatGoogleGenerativeAI(
+            google_api_key=s.llm_api_key,
+            model=s.llm_model_name,
+        )
     else:
         raise ValueError(
             f"지원하지 않는 LLM_PROVIDER: {s.llm_provider}"

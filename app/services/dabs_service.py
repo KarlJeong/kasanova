@@ -7,7 +7,7 @@ from redis.asyncio import Redis
 
 logger = logging.getLogger(__name__)
 
-DABS_API_URL = "https://api.kr.kasa.exchange/dabs"
+DABS_API_URL = "https://api.staging.kr.kasa.exchange/dabs"
 CACHE_KEY = "dabs:list"
 CACHE_TTL = 60 * 60 * 24  # 24시간
 

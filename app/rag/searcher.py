@@ -30,10 +30,12 @@ class HybridSearcher:
         os_client: Any,
         embedder: Embedder,
         index_name: str,
+        search_pipeline: str = "weighted-mean-pipeline",
     ) -> None:
         self.os_client = os_client
         self.embedder = embedder
         self.index_name = index_name
+        self.search_pipeline = search_pipeline
 
     async def search(
         self,
@@ -73,7 +75,7 @@ class HybridSearcher:
         response = await self.os_client.search(
             index=self.index_name,
             body=body,
-            params={"search_pipeline": "weighted-mean-pipeline"},
+            params={"search_pipeline": self.search_pipeline},
         )
 
         results: list[dict[str, Any]] = []
@@ -89,4 +91,32 @@ class HybridSearcher:
                 }
             )
 
+        return results
+
+    async def fetch_by_doc_id(
+        self, doc_id: str
+    ) -> list[dict[str, Any]]:
+        """doc_id의 모든 청크를 chunk_index 순으로 반환."""
+        response = await self.os_client.search(
+            index=self.index_name,
+            body={
+                "size": 100,
+                "query": {
+                    "term": {"doc_id.keyword": doc_id}
+                },
+                "sort": [{"chunk_index": "asc"}],
+            },
+        )
+        results: list[dict[str, Any]] = []
+        for hit in response["hits"]["hits"]:
+            source = hit["_source"]
+            results.append(
+                {
+                    "content": source["content"],
+                    "doc_id": source["doc_id"],
+                    "source": source["metadata"]["filename"],
+                    "chunk_index": source["chunk_index"],
+                    "score": 0.0,
+                }
+            )
         return results

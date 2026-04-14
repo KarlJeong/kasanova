@@ -143,15 +143,17 @@ def create_text_to_sql_tool(
         )
         schemas_text = _format_schemas(schemas)
 
-        try:
-            domain_knowledge = await retrieval_tool.ainvoke(
-                {"query": query, "category": "kb"}
-            )
-        except Exception:
-            logger.exception(
-                "[text_to_sql_tool] 도메인 지식 조회 실패"
-            )
-            domain_knowledge = ""
+        # 도메인 지식 조회는 단순 조회 질문에서 노이즈로 작용해 일단 비활성화.
+        # try:
+        #     domain_knowledge = await retrieval_tool.ainvoke(
+        #         {"query": query, "category": "kb"}
+        #     )
+        # except Exception:
+        #     logger.exception(
+        #         "[text_to_sql_tool] 도메인 지식 조회 실패"
+        #     )
+        #     domain_knowledge = ""
+        domain_knowledge = ""
 
         sql_prompt = _build_sql_prompt(
             schemas_text,
@@ -159,9 +161,11 @@ def create_text_to_sql_tool(
             query,
         )
         sql_response = await llm.ainvoke(sql_prompt)
-        sql = _strip_code_fence(
-            _extract_llm_text(sql_response)
+        raw_response = _extract_llm_text(sql_response)
+        logger.info(
+            "[text_to_sql_tool] LLM 원본 응답: %s", raw_response
         )
+        sql = _strip_code_fence(raw_response)
         logger.info(
             "[text_to_sql_tool] 생성 SQL: %s", sql
         )
