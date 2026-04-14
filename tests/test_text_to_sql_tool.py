@@ -575,6 +575,314 @@ class TestErrorPaths:
         assert "```" not in executed
 
 
+class TestDecomposition:
+    """Pattern B 분해 경로 통합 테스트.
+
+    planner LLM 응답을 JSON으로 흉내내고, 각 sub-query SQL 호출에
+    대해 다른 응답을 순차로 돌려준다.
+    """
+
+    def _make_planner_response(self) -> AIMessage:
+        return AIMessage(
+            content=(
+                '{"requires_decomposition": true,'
+                ' "reasoning": "세 조건 AND 결합",'
+                ' "key_column": "member_id",'
+                ' "combine": "intersect",'
+                ' "subqueries": ['
+                '"북촌 월하재 청약자 member_id 목록",'
+                '"북촌 월하재 보유자 member_id 목록",'
+                '"북촌 월하재 배당 수령자 member_id 목록"]}'
+            )
+        )
+
+    async def test_intersect_three_subqueries(
+        self,
+        mock_schema_searcher,
+        mock_kb_searcher,
+        mock_mysql_client,
+        mock_llm,
+    ) -> None:
+        # LLM 호출 순서: planner → sub1 SQL → sub2 SQL → sub3 SQL
+        mock_llm.ainvoke = AsyncMock(
+            side_effect=[
+                self._make_planner_response(),
+                AIMessage(
+                    content="SELECT member_id FROM kasa_offering_subscription"
+                ),
+                AIMessage(
+                    content="SELECT member_id FROM kasa_ledger_dabs_account"
+                ),
+                AIMessage(
+                    content="SELECT member_id FROM kasa_dividend_history"
+                ),
+            ]
+        )
+        # sub-query별로 다른 결과 (각 호출 순서대로)
+        mock_mysql_client.execute_select = AsyncMock(
+            side_effect=[
+                # sub1: 청약자
+                [
+                    {"member_id": 1},
+                    {"member_id": 2},
+                    {"member_id": 3},
+                    {"member_id": 4},
+                ],
+                # sub2: 보유자
+                [
+                    {"member_id": 2},
+                    {"member_id": 3},
+                    {"member_id": 5},
+                ],
+                # sub3: 배당 수령자
+                [
+                    {"member_id": 3},
+                    {"member_id": 4},
+                    {"member_id": 5},
+                ],
+            ]
+        )
+
+        tool = _make_tool(
+            mock_schema_searcher,
+            mock_kb_searcher,
+            mock_mysql_client,
+            mock_llm,
+        )
+        result = await tool.ainvoke({"query": "복합 질문"})
+
+        # 교집합: {2,3,4} ∩ {2,3,5} ∩ {3,4,5} = {3}
+        assert "분해 실행" in result
+        assert "intersect" in result
+        assert "최종 1건" in result
+        assert "sub1=4" in result
+        assert "sub2=3" in result
+        assert "sub3=3" in result
+
+    async def test_union_two_subqueries(
+        self,
+        mock_schema_searcher,
+        mock_kb_searcher,
+        mock_mysql_client,
+        mock_llm,
+    ) -> None:
+        mock_llm.ainvoke = AsyncMock(
+            side_effect=[
+                AIMessage(
+                    content=(
+                        '{"requires_decomposition": true,'
+                        ' "reasoning": "OR",'
+                        ' "key_column": "member_id",'
+                        ' "combine": "union",'
+                        ' "subqueries": ["a", "b"]}'
+                    )
+                ),
+                AIMessage(content="SELECT member_id FROM x"),
+                AIMessage(content="SELECT member_id FROM y"),
+            ]
+        )
+        mock_mysql_client.execute_select = AsyncMock(
+            side_effect=[
+                [{"member_id": 1}, {"member_id": 2}],
+                [{"member_id": 2}, {"member_id": 3}],
+            ]
+        )
+
+        tool = _make_tool(
+            mock_schema_searcher,
+            mock_kb_searcher,
+            mock_mysql_client,
+            mock_llm,
+        )
+        result = await tool.ainvoke({"query": "A 또는 B"})
+
+        # 합집합: {1,2,3} → 3건
+        assert "최종 3건" in result
+        assert "union" in result
+
+    async def test_difference_subqueries(
+        self,
+        mock_schema_searcher,
+        mock_kb_searcher,
+        mock_mysql_client,
+        mock_llm,
+    ) -> None:
+        mock_llm.ainvoke = AsyncMock(
+            side_effect=[
+                AIMessage(
+                    content=(
+                        '{"requires_decomposition": true,'
+                        ' "reasoning": "BUT NOT",'
+                        ' "key_column": "member_id",'
+                        ' "combine": "difference",'
+                        ' "subqueries": ["a", "b"]}'
+                    )
+                ),
+                AIMessage(content="SELECT member_id FROM x"),
+                AIMessage(content="SELECT member_id FROM y"),
+            ]
+        )
+        mock_mysql_client.execute_select = AsyncMock(
+            side_effect=[
+                [
+                    {"member_id": 1},
+                    {"member_id": 2},
+                    {"member_id": 3},
+                ],
+                [{"member_id": 2}],
+            ]
+        )
+
+        tool = _make_tool(
+            mock_schema_searcher,
+            mock_kb_searcher,
+            mock_mysql_client,
+            mock_llm,
+        )
+        result = await tool.ainvoke(
+            {"query": "A했지만 B는 안 한"}
+        )
+
+        # 차집합: {1,2,3} - {2} = {1, 3} → 2건
+        assert "최종 2건" in result
+        assert "difference" in result
+
+    async def test_decomposition_falls_through_when_planner_returns_false(
+        self,
+        mock_schema_searcher,
+        mock_kb_searcher,
+        mock_mysql_client,
+        mock_llm,
+    ) -> None:
+        """planner가 분해 불필요로 판단하면 단일 SQL 경로로 진행."""
+        mock_llm.ainvoke = AsyncMock(
+            side_effect=[
+                AIMessage(
+                    content=(
+                        '{"requires_decomposition": false,'
+                        ' "reasoning": "단일 카운트",'
+                        ' "key_column": null,'
+                        ' "combine": null,'
+                        ' "subqueries": []}'
+                    )
+                ),
+                AIMessage(
+                    content="SELECT COUNT(*) FROM kasa_member"
+                ),
+            ]
+        )
+        tool = _make_tool(
+            mock_schema_searcher,
+            mock_kb_searcher,
+            mock_mysql_client,
+            mock_llm,
+        )
+        result = await tool.ainvoke(
+            {"query": "이번 달 신규 가입 회원 수"}
+        )
+        # 단일 경로 결과: 기본 픽스처 mysql_client는 [{"count": 42}] 반환
+        assert result == "결과 1건: 42"
+        assert "분해 실행" not in result
+
+    async def test_subquery_failure_reports_error(
+        self,
+        mock_schema_searcher,
+        mock_kb_searcher,
+        mock_mysql_client,
+        mock_llm,
+    ) -> None:
+        """sub-query 중 하나라도 SQL 생성/검증 실패 시 분해 경로
+        전체가 _CANNOT_ANSWER로 떨어진다."""
+        mock_llm.ainvoke = AsyncMock(
+            side_effect=[
+                self._make_planner_response(),
+                AIMessage(content="SELECT member_id FROM x"),
+                AIMessage(content="UNKNOWN: 두 번째 sub 실패"),
+                AIMessage(content="SELECT member_id FROM z"),
+            ]
+        )
+        mock_mysql_client.execute_select = AsyncMock(
+            return_value=[{"member_id": 1}]
+        )
+
+        tool = _make_tool(
+            mock_schema_searcher,
+            mock_kb_searcher,
+            mock_mysql_client,
+            mock_llm,
+        )
+        result = await tool.ainvoke({"query": "복합 질문"})
+        assert result == "조회할 수 없습니다"
+
+    async def test_subquery_missing_key_column_fails(
+        self,
+        mock_schema_searcher,
+        mock_kb_searcher,
+        mock_mysql_client,
+        mock_llm,
+    ) -> None:
+        """sub-query 결과에 key_column이 없으면 분해 경로 폴백."""
+        mock_llm.ainvoke = AsyncMock(
+            side_effect=[
+                AIMessage(
+                    content=(
+                        '{"requires_decomposition": true,'
+                        ' "reasoning": "AND",'
+                        ' "key_column": "member_id",'
+                        ' "combine": "intersect",'
+                        ' "subqueries": ["a", "b"]}'
+                    )
+                ),
+                AIMessage(content="SELECT user_id FROM x"),
+                AIMessage(content="SELECT user_id FROM y"),
+            ]
+        )
+        mock_mysql_client.execute_select = AsyncMock(
+            return_value=[{"user_id": 1}]
+        )
+
+        tool = _make_tool(
+            mock_schema_searcher,
+            mock_kb_searcher,
+            mock_mysql_client,
+            mock_llm,
+        )
+        result = await tool.ainvoke({"query": "복합 질문"})
+        assert result == "조회할 수 없습니다"
+
+    async def test_intersection_of_zero_returns_no_data(
+        self,
+        mock_schema_searcher,
+        mock_kb_searcher,
+        mock_mysql_client,
+        mock_llm,
+    ) -> None:
+        """교집합이 비면 _NO_DATA 반환."""
+        mock_llm.ainvoke = AsyncMock(
+            side_effect=[
+                self._make_planner_response(),
+                AIMessage(content="SELECT member_id FROM a"),
+                AIMessage(content="SELECT member_id FROM b"),
+                AIMessage(content="SELECT member_id FROM c"),
+            ]
+        )
+        mock_mysql_client.execute_select = AsyncMock(
+            side_effect=[
+                [{"member_id": 1}, {"member_id": 2}],
+                [{"member_id": 3}, {"member_id": 4}],
+                [{"member_id": 5}],
+            ]
+        )
+        tool = _make_tool(
+            mock_schema_searcher,
+            mock_kb_searcher,
+            mock_mysql_client,
+            mock_llm,
+        )
+        result = await tool.ainvoke({"query": "복합 질문"})
+        assert result == "조회된 데이터가 없습니다"
+
+
 class TestExtractKbTables:
     def test_extracts_comma_separated_list(self) -> None:
         from app.rag.text_to_sql_tool import _extract_kb_tables
