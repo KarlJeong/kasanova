@@ -8,11 +8,6 @@ from langchain_core.language_models import BaseChatModel
 from langchain_core.tools import BaseTool, tool
 
 from app.db.mysql_client import MySQLClient
-from app.rag.query_planner import (
-    QueryPlan,
-    combine_keys,
-    plan_query,
-)
 from app.rag.schema_searcher import SchemaSearcher
 from app.rag.searcher import HybridSearcher
 
@@ -191,318 +186,7 @@ def create_text_to_sql_tool(
 
     kb_searcher: 도메인 지식(category="kb") 검색에 사용한다.
     청크 단위 하이브리드 검색으로 top-1 문서를 찾아 통째로 주입한다.
-
-    멀티 조건 쿼리는 query_planner로 분해 후 각 sub-query를
-    독립 실행하고 코드가 set 연산으로 결합한다 (Pattern B).
     """
-
-    async def _execute_single_query(
-        query: str, literals: list[str]
-    ) -> tuple[list[dict[str, Any]] | None, str | None]:
-        """단일 조건 쿼리에 대해 schema 검색 + KB + SQL 생성·실행
-        파이프라인을 한 번 돌린다.
-
-        Returns:
-            (rows, error_message)
-            - 성공: (rows, None) — rows는 빈 리스트일 수 있음
-            - 실패: (None, error_message) — 호출자가 그대로 반환
-        """
-        logger.info(
-            "[_execute_single_query] query=%r literals=%r",
-            query,
-            literals,
-        )
-
-        schemas_result, kb_result = await asyncio.gather(
-            schema_searcher.search(query),
-            kb_searcher.fetch_best_docs(query, category="kb"),
-            return_exceptions=True,
-        )
-
-        if isinstance(schemas_result, BaseException):
-            logger.exception(
-                "[_execute_single_query] 스키마 조회 실패",
-                exc_info=schemas_result,
-            )
-            return None, _CANNOT_ANSWER
-        schemas: list[dict[str, Any]] = schemas_result
-
-        if isinstance(kb_result, BaseException):
-            logger.exception(
-                "[_execute_single_query] KB 조회 실패",
-                exc_info=kb_result,
-            )
-            kb_docs: list[dict[str, Any]] = []
-        else:
-            kb_docs = kb_result
-
-        if not schemas:
-            logger.info(
-                "[_execute_single_query] 관련 스키마 없음"
-            )
-            return None, _CANNOT_ANSWER
-
-        logger.info(
-            "[_execute_single_query] 스키마 %d개 후보 (RAG): %s",
-            len(schemas),
-            [s["table_name"] for s in schemas],
-        )
-
-        # KB 보강
-        if kb_docs:
-            kb_union: list[str] = []
-            kb_seen: set[str] = set()
-            for idx, doc in enumerate(kb_docs, 1):
-                doc_tables = _extract_kb_tables(doc["content"])
-                added_for_this_doc = 0
-                for t in doc_tables:
-                    if t in kb_seen:
-                        continue
-                    kb_seen.add(t)
-                    kb_union.append(t)
-                    added_for_this_doc += 1
-                logger.info(
-                    "[_execute_single_query] KB 문서 [%d/%d]"
-                    " %s (score=%.4f) → 테이블 %d개 언급,"
-                    " 신규 %d개",
-                    idx,
-                    len(kb_docs),
-                    doc["source"],
-                    doc["score"],
-                    len(doc_tables),
-                    added_for_this_doc,
-                )
-
-            existing = {s["table_name"] for s in schemas}
-            missing = [
-                t for t in kb_union if t not in existing
-            ][:_MAX_KB_PINNED_TABLES]
-            logger.info(
-                "[_execute_single_query] KB 합집합 %d개,"
-                " 기존 후보 외 %d개 보강 시도: %s",
-                len(kb_union),
-                len(missing),
-                missing,
-            )
-            if missing:
-                extra = (
-                    await schema_searcher.fetch_schemas_by_names(
-                        missing
-                    )
-                )
-                if extra:
-                    schemas = schemas + extra
-                    logger.info(
-                        "[_execute_single_query] KB 기반 보강"
-                        " 후 스키마 %d개: %s",
-                        len(schemas),
-                        [s["table_name"] for s in schemas],
-                    )
-
-        schemas_text = _format_schemas(schemas)
-
-        if kb_docs:
-            primary = kb_docs[0]
-            domain_knowledge = primary["content"]
-            logger.info(
-                "[_execute_single_query] 도메인 지식 본문 주입"
-                " (top-1): %s (청크 %d개, %d자, score=%.4f)"
-                " [총 KB %d개 중]",
-                primary["source"],
-                primary["chunk_count"],
-                len(domain_knowledge),
-                primary["score"],
-                len(kb_docs),
-            )
-        else:
-            domain_knowledge = ""
-            logger.info(
-                "[_execute_single_query] 도메인 지식 없음"
-            )
-
-        sql_user_prompt = _build_sql_prompt(
-            schemas_text,
-            str(domain_knowledge or ""),
-            query,
-            literals,
-        )
-        sql_response = await llm.ainvoke(
-            [
-                ("system", _SQL_SYSTEM_PROMPT),
-                ("human", sql_user_prompt),
-            ]
-        )
-        raw_response = _extract_llm_text(sql_response)
-        logger.info(
-            "[_execute_single_query] LLM 원본 응답: %s",
-            raw_response,
-        )
-        sql = _strip_code_fence(raw_response)
-
-        unknown_reason = _parse_unknown_reason(sql)
-        if unknown_reason is not None:
-            logger.warning(
-                "[_execute_single_query] SQL 생성 실패"
-                " (UNKNOWN): %s | query=%r literals=%r"
-                " 후보 스키마=%s",
-                unknown_reason,
-                query,
-                literals,
-                [s["table_name"] for s in schemas],
-            )
-            return None, _CANNOT_ANSWER
-
-        logger.info(
-            "[_execute_single_query] 생성 SQL: %s", sql
-        )
-
-        if not _validate_sql(sql):
-            logger.warning(
-                "[_execute_single_query] SQL 검증 실패: %s",
-                sql,
-            )
-            return None, _CANNOT_ANSWER
-
-        logger.info(
-            "[_execute_single_query] MySQL 실행: %s", sql
-        )
-        rows = await mysql_client.execute_select(sql)
-        if rows is None:
-            return None, _CANNOT_ANSWER
-        return rows, None
-
-    async def _execute_decomposed(
-        plan: QueryPlan, literals: list[str]
-    ) -> str:
-        """plan에 따라 sub-query들을 병렬 실행하고 결과를 결합한다.
-
-        sub-query 실행이 실패하거나 key_column이 누락된 경우 None을
-        반환해 호출자가 단일 SQL 경로로 폴백할 수 있게 한다.
-        """
-        assert plan.requires_decomposition
-        assert plan.key_column is not None
-        assert plan.combine is not None
-        key = plan.key_column
-
-        logger.info(
-            "[_execute_decomposed] 분해 실행 시작:"
-            " %d개 sub-query, key=%s, combine=%s",
-            len(plan.subqueries),
-            key,
-            plan.combine,
-        )
-
-        # sub-query 병렬 실행
-        sub_results = await asyncio.gather(
-            *[
-                _execute_single_query(sub, literals)
-                for sub in plan.subqueries
-            ],
-            return_exceptions=True,
-        )
-
-        # 각 sub-query에서 키 집합 추출
-        key_sets: list[set[Any]] = []
-        sub_row_lists: list[list[dict[str, Any]]] = []
-        for i, result in enumerate(sub_results, 1):
-            sub = plan.subqueries[i - 1]
-            if isinstance(result, BaseException):
-                logger.warning(
-                    "[_execute_decomposed] sub[%d] 예외:"
-                    " %s | sub=%r",
-                    i,
-                    result,
-                    sub,
-                )
-                return _CANNOT_ANSWER
-            rows, err = result
-            if rows is None:
-                logger.warning(
-                    "[_execute_decomposed] sub[%d] 실패:"
-                    " %s | sub=%r",
-                    i,
-                    err,
-                    sub,
-                )
-                return _CANNOT_ANSWER
-            if not rows:
-                logger.info(
-                    "[_execute_decomposed] sub[%d] 결과 0건"
-                    " | sub=%r",
-                    i,
-                    sub,
-                )
-                # union/difference에서는 0건이 의미 있을 수 있음
-                key_sets.append(set())
-                sub_row_lists.append([])
-                continue
-
-            # 첫 번째 행의 컬럼으로 key column 존재 검증
-            if key not in rows[0]:
-                logger.warning(
-                    "[_execute_decomposed] sub[%d] key 컬럼"
-                    " %r 누락 (있는 컬럼: %s) | sub=%r",
-                    i,
-                    key,
-                    list(rows[0].keys()),
-                    sub,
-                )
-                return _CANNOT_ANSWER
-
-            keys = {row[key] for row in rows if row.get(key) is not None}
-            key_sets.append(keys)
-            sub_row_lists.append(rows)
-            logger.info(
-                "[_execute_decomposed] sub[%d/%d] 완료:"
-                " %d행, %d개 키 | sub=%r",
-                i,
-                len(plan.subqueries),
-                len(rows),
-                len(keys),
-                sub,
-            )
-
-        # 결합
-        final_keys = combine_keys(key_sets, plan.combine)
-        logger.info(
-            "[_execute_decomposed] 결합(%s) 결과: %d개 키",
-            plan.combine,
-            len(final_keys),
-        )
-
-        if not final_keys:
-            return _NO_DATA
-
-        # 첫 번째 sub-query의 row 중 final_keys에 속하는 것만 추리고
-        # 추가 컬럼이 있다면 그대로 보존. union/difference에서 첫
-        # sub의 row만으로 충분하지 않을 수 있는 점은 1차 구현의
-        # 한계로 둔다 (이런 경우 LLM이 final_keys만 보고 후속 질문
-        # 가능).
-        primary_rows = sub_row_lists[0]
-        filtered = [
-            r for r in primary_rows if r.get(key) in final_keys
-        ]
-        # 누락된 키(첫 sub에 없는데 결합에서 살아남음)는 키만 가진
-        # 더미 행으로 채워 표시
-        present_keys = {r.get(key) for r in filtered}
-        for k in final_keys:
-            if k not in present_keys:
-                filtered.append({key: k})
-
-        sub_summary = ", ".join(
-            f"sub{i + 1}={len(s)}"
-            for i, s in enumerate(key_sets)
-        )
-        result_str = _format_rows_for_tool_result(filtered)
-        decomposed_str = (
-            f"[분해 실행: {plan.combine}, {sub_summary}"
-            f" → 최종 {len(final_keys)}건] {result_str}"
-        )
-        logger.info(
-            "[_execute_decomposed] tool 결과: %s",
-            decomposed_str[:300],
-        )
-        return decomposed_str
 
     @tool
     async def text_to_sql_tool(
@@ -551,35 +235,179 @@ def create_text_to_sql_tool(
             literals,
         )
 
-        # 1단계: 쿼리 분해 가능성 판단 (planner LLM 호출)
-        plan = await plan_query(query, literals, llm)
+        # 스키마와 KB를 병렬로 조회한다. 지금까지는 순차 호출이라
+        # 불필요한 레이턴시가 있었고, KB로 스키마를 보강하려면
+        # 둘 다 완료된 시점에 합쳐야 하므로 gather가 자연스럽다.
+        #
+        # KB는 여러 문서를 반환할 수 있다(멀티 도메인 쿼리 지원).
+        # 본문 주입은 top-1만 사용해 프롬프트 크기를 유지하면서,
+        # 테이블 이름 추출은 전체 반환 문서의 합집합으로 수행한다.
+        schemas_result, kb_result = await asyncio.gather(
+            schema_searcher.search(query),
+            kb_searcher.fetch_best_docs(query, category="kb"),
+            return_exceptions=True,
+        )
 
-        # 2단계 (분해 경로): 분해 가능하면 sub-query 병렬 실행
-        if plan.requires_decomposition:
-            logger.info(
-                "[text_to_sql_tool] 분해 실행으로 분기"
-                " (reason=%s)",
-                plan.reasoning,
+        if isinstance(schemas_result, BaseException):
+            logger.exception(
+                "[text_to_sql_tool] 스키마 조회 실패",
+                exc_info=schemas_result,
             )
-            return await _execute_decomposed(plan, literals)
+            return _CANNOT_ANSWER
+        schemas: list[dict[str, Any]] = schemas_result
 
-        # 2단계 (단일 경로): 기존 단일 SQL 파이프라인
+        if isinstance(kb_result, BaseException):
+            logger.exception(
+                "[text_to_sql_tool] 도메인 지식 조회 실패",
+                exc_info=kb_result,
+            )
+            kb_docs: list[dict[str, Any]] = []
+        else:
+            kb_docs = kb_result
+
+        if not schemas:
+            logger.info(
+                "[text_to_sql_tool] 관련 스키마 없음"
+            )
+            return _CANNOT_ANSWER
         logger.info(
-            "[text_to_sql_tool] 단일 SQL 경로 (reason=%s)",
-            plan.reasoning,
+            "[text_to_sql_tool] 스키마 %d개 후보 (RAG): %s",
+            len(schemas),
+            [s["table_name"] for s in schemas],
         )
-        rows, error = await _execute_single_query(
-            query, literals
+
+        # KB 문서들이 있으면 **전체** 문서 본문에서 `kasa_*`
+        # 테이블명을 추출해 합집합을 만든다. 멀티 도메인 쿼리
+        # (예: "청약 + 보유 + 배당")에서 각 도메인이 다른 KB
+        # 문서에 속해도 테이블 커버리지가 유지되도록 한다.
+        if kb_docs:
+            kb_union: list[str] = []
+            kb_seen: set[str] = set()
+            for idx, doc in enumerate(kb_docs, 1):
+                doc_tables = _extract_kb_tables(doc["content"])
+                added_for_this_doc = 0
+                for t in doc_tables:
+                    if t in kb_seen:
+                        continue
+                    kb_seen.add(t)
+                    kb_union.append(t)
+                    added_for_this_doc += 1
+                logger.info(
+                    "[text_to_sql_tool] KB 문서 [%d/%d] %s"
+                    " (score=%.4f) → 테이블 %d개 언급,"
+                    " 신규 %d개",
+                    idx,
+                    len(kb_docs),
+                    doc["source"],
+                    doc["score"],
+                    len(doc_tables),
+                    added_for_this_doc,
+                )
+
+            existing = {s["table_name"] for s in schemas}
+            missing = [
+                t for t in kb_union if t not in existing
+            ][:_MAX_KB_PINNED_TABLES]
+            logger.info(
+                "[text_to_sql_tool] KB 합집합 %d개,"
+                " 기존 후보 외 %d개 보강 시도: %s",
+                len(kb_union),
+                len(missing),
+                missing,
+            )
+            if missing:
+                extra = (
+                    await schema_searcher.fetch_schemas_by_names(
+                        missing
+                    )
+                )
+                if extra:
+                    schemas = schemas + extra
+                    logger.info(
+                        "[text_to_sql_tool] KB 기반 보강 후"
+                        " 스키마 %d개: %s",
+                        len(schemas),
+                        [s["table_name"] for s in schemas],
+                    )
+
+        schemas_text = _format_schemas(schemas)
+
+        # 본문 주입은 top-1 하나만. top-N 문서를 전부 넣으면
+        # 프롬프트가 2~3배로 부풀고 LLM이 여러 프로세스 서사를
+        # 동시에 읽으며 혼동할 수 있다. 나머지 도메인은 위에서
+        # 테이블 스키마를 이미 합쳐놓았으므로 FK·컬럼 정의로
+        # 추론 가능.
+        if kb_docs:
+            primary = kb_docs[0]
+            domain_knowledge = primary["content"]
+            logger.info(
+                "[text_to_sql_tool] 도메인 지식 본문 주입"
+                " (top-1 only): %s (청크 %d개, %d자,"
+                " score=%.4f) [총 KB 문서 %d개 중]",
+                primary["source"],
+                primary["chunk_count"],
+                len(domain_knowledge),
+                primary["score"],
+                len(kb_docs),
+            )
+        else:
+            domain_knowledge = ""
+            logger.info(
+                "[text_to_sql_tool] 도메인 지식 없음"
+            )
+
+        sql_user_prompt = _build_sql_prompt(
+            schemas_text,
+            str(domain_knowledge or ""),
+            query,
+            literals,
         )
-        if error is not None:
-            return error
-        if rows is None or len(rows) == 0:
+        sql_response = await llm.ainvoke(
+            [
+                ("system", _SQL_SYSTEM_PROMPT),
+                ("human", sql_user_prompt),
+            ]
+        )
+        raw_response = _extract_llm_text(sql_response)
+        logger.info(
+            "[text_to_sql_tool] LLM 원본 응답: %s", raw_response
+        )
+        sql = _strip_code_fence(raw_response)
+
+        unknown_reason = _parse_unknown_reason(sql)
+        if unknown_reason is not None:
+            logger.warning(
+                "[text_to_sql_tool] SQL 생성 실패 (UNKNOWN): %s"
+                " | query=%r literals=%r 후보 스키마=%s",
+                unknown_reason,
+                query,
+                literals,
+                [s["table_name"] for s in schemas],
+            )
+            return _CANNOT_ANSWER
+
+        logger.info(
+            "[text_to_sql_tool] 생성 SQL: %s", sql
+        )
+
+        if not _validate_sql(sql):
+            logger.warning(
+                "[text_to_sql_tool] SQL 검증 실패: %s", sql
+            )
+            return _CANNOT_ANSWER
+
+        logger.info(
+            "[text_to_sql_tool] MySQL 실행: %s", sql
+        )
+        rows = await mysql_client.execute_select(sql)
+        if rows is None:
+            return _CANNOT_ANSWER
+        if len(rows) == 0:
             return _NO_DATA
 
         tool_result = _format_rows_for_tool_result(rows)
         logger.info(
-            "[text_to_sql_tool] tool 결과: %s",
-            tool_result[:300],
+            "[text_to_sql_tool] tool 결과: %s", tool_result
         )
         return tool_result
 
