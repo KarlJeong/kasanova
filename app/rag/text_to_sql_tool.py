@@ -30,7 +30,9 @@ _SQL_SYSTEM_PROMPT = """\
 
 [출력 계약 — 반드시 준수]
 - 성공 시: 코드 펜스·설명·주석·마크다운 없이 `SELECT`로 시작하는 SQL 한 문장만 출력한다.
-- 스키마만으로 답할 수 없으면 정확히 대문자 `UNKNOWN` 한 단어만 출력한다.
+- 스키마만으로 답할 수 없으면 `UNKNOWN: <사유>` 형식으로 한 줄만 출력한다.
+  사유는 한국어로 간결히 (예: `UNKNOWN: kasa_offering_subscription에 종목코드 컬럼이 없음`,
+  `UNKNOWN: 멤버 이메일을 참조하는 테이블이 주어지지 않음`).
 - 접두/접미 텍스트, 인사말, 가정 설명, 여러 문장 출력 금지.
 
 [SQL 규칙]
@@ -46,7 +48,7 @@ _SQL_SYSTEM_PROMPT = """\
 - MySQL 8.x 방언만 사용한다. 타 DB 방언 함수(`DATE_TRUNC`, `TO_DATE` 등) 금지.
 
 [판단 규칙]
-- 필요한 테이블·컬럼이 주어진 스키마에 없으면 추측하지 말고 `UNKNOWN`만 출력한다.
+- 필요한 테이블·컬럼이 주어진 스키마에 없으면 추측하지 말고 `UNKNOWN: <사유>`로 출력한다.
 - 질문이 모호해도 가장 합리적인 해석 하나로 SQL을 생성한다. 되묻거나 복수 해석을 나열하지 않는다.
 """
 
@@ -55,9 +57,28 @@ def _strip_code_fence(text: str) -> str:
     return _CODE_FENCE_PATTERN.sub("", text).strip()
 
 
+def _parse_unknown_reason(text: str) -> str | None:
+    """LLM 응답이 UNKNOWN 계열이면 사유를 추출한다.
+
+    반환값이 None이 아니면 SQL 생성 실패로 간주한다.
+    사유가 명시되지 않았으면 빈 문자열이 아닌 기본 메시지를 반환한다.
+    """
+    stripped = text.strip()
+    if not stripped:
+        return "빈 응답"
+    upper = stripped.upper()
+    if upper == "UNKNOWN":
+        return "사유 미기재"
+    if upper.startswith("UNKNOWN"):
+        # "UNKNOWN: ...", "UNKNOWN - ...", "UNKNOWN\n..." 등 허용
+        reason = stripped[len("UNKNOWN"):].lstrip(" :-\n\t")
+        return reason or "사유 미기재"
+    return None
+
+
 def _validate_sql(sql: str) -> bool:
     """SELECT로 시작하고 금지 키워드가 없는지 검증."""
-    if not sql or sql.strip().upper() == "UNKNOWN":
+    if not sql:
         return False
     stripped = sql.strip()
     if not stripped.upper().startswith("SELECT"):
@@ -221,6 +242,19 @@ def create_text_to_sql_tool(
             "[text_to_sql_tool] LLM 원본 응답: %s", raw_response
         )
         sql = _strip_code_fence(raw_response)
+
+        unknown_reason = _parse_unknown_reason(sql)
+        if unknown_reason is not None:
+            logger.warning(
+                "[text_to_sql_tool] SQL 생성 실패 (UNKNOWN): %s"
+                " | query=%r literals=%r 후보 스키마=%s",
+                unknown_reason,
+                query,
+                literals,
+                [s["table_name"] for s in schemas],
+            )
+            return _CANNOT_ANSWER
+
         logger.info(
             "[text_to_sql_tool] 생성 SQL: %s", sql
         )
