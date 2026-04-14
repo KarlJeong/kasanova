@@ -72,11 +72,18 @@ def _format_schemas(schemas: list[dict]) -> str:
 
 
 def _build_sql_prompt(
-    schemas_text: str, domain_knowledge: str, query: str
+    schemas_text: str,
+    domain_knowledge: str,
+    query: str,
+    literals: list[str],
 ) -> str:
     kb_block = (
         domain_knowledge.strip() if domain_knowledge else "(없음)"
     )
+    if literals:
+        literals_block = "\n".join(f"- {lit}" for lit in literals)
+    else:
+        literals_block = "(없음)"
     return (
         "## 사용 가능한 스키마\n"
         f"{schemas_text}\n\n"
@@ -84,8 +91,12 @@ def _build_sql_prompt(
         f"{kb_block}\n\n"
         "## 질문\n"
         f"{query}\n\n"
+        "## 리터럴 (WHERE 절 등에 그대로 사용)\n"
+        f"{literals_block}\n\n"
         "위 스키마에 정의된 테이블·컬럼만 사용해 질문에 답하는 "
         "MySQL SELECT 문 하나만 출력하라. "
+        "질문에 명시된 식별자·코드·이름·날짜 등은 위 리터럴 목록에 "
+        "있는 값을 그대로 사용한다. "
         "스키마만으로 답할 수 없으면 정확히 `UNKNOWN`만 출력하라."
     )
 
@@ -127,7 +138,10 @@ def create_text_to_sql_tool(
     """Text-to-SQL LangGraph 도구를 생성한다."""
 
     @tool
-    async def text_to_sql_tool(query: str) -> str:
+    async def text_to_sql_tool(
+        query: str,
+        literals: list[str] | None = None,
+    ) -> str:
         """사내 MySQL DB를 조회해 정량 질문에 답할 때 사용하는 도구.
 
         회원 수, 거래 건수, 수익 지급 금액 등 숫자·집계·필터 기반의
@@ -135,21 +149,35 @@ def create_text_to_sql_tool(
         retrieval_tool을 사용하라.
 
         query (필수):
-        - 반드시 사용자가 말한 **원본 자연어 질문을 그대로** 넘겨라.
-        - 한국어 질문은 한국어 그대로. SQL·영어 의역·재작성 금지.
+        - 사용자 질문의 **의도**만 자연어로 담아라.
+        - DABS 종목코드·회원 ID·주소·사람 이름·구체적 숫자·날짜 등
+          식별용 리터럴 값은 query에 넣지 말고 literals 파라미터로 분리하라.
+          (스키마 RAG 검색 품질을 떨어뜨리기 때문)
+        - 한국어 질문은 한국어 그대로. SQL·영어 의역 금지.
         - 이 도구 내부에서 스키마 검색 후 LLM이 SQL을 생성한다.
           호출자(상위 LLM)가 SQL을 만들면 안 된다.
 
+        literals (선택):
+        - SQL의 WHERE 절 등에 그대로 들어갈 식별용 값들의 리스트.
+        - 예: DABS 종목코드("KR011A200005X8"), 회원 이메일, 특정 날짜 등.
+        - 없으면 생략하거나 빈 리스트를 넘겨라.
+
         올바른 사용 예시:
         - query="이번 달 신규 가입 회원 수는?"
+        - query="북촌 월하재를 청약한 멤버 목록을 조회해줘",
+          literals=["KR011A200005X8"]
         - query="지난주 DABS별 거래 금액 합계"
-        - query="현재 전체 활성 회원 수?"
 
         잘못된 사용 예시 (금지):
         - query="SELECT COUNT(*) FROM kasa_member WHERE ..."
-        - query="How many active members are there?"
+        - query="KR011A200005X8를 청약한 멤버 목록"  # 코드를 query에 포함
         """
-        logger.info("[text_to_sql_tool] query=%r", query)
+        literals = literals or []
+        logger.info(
+            "[text_to_sql_tool] query=%r, literals=%r",
+            query,
+            literals,
+        )
 
         schemas = await schema_searcher.search(query)
         if not schemas:
@@ -180,6 +208,7 @@ def create_text_to_sql_tool(
             schemas_text,
             str(domain_knowledge or ""),
             query,
+            literals,
         )
         sql_response = await llm.ainvoke(
             [
