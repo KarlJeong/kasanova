@@ -19,7 +19,7 @@ FORBIDDEN_PATTERN = re.compile(
     re.IGNORECASE,
 )
 CODE_FENCE_PATTERN = re.compile(
-    r"^```(?:sql)?\s*\n?|\n?```\s*$",
+    r"^```[a-z]*\s*\n?|\n?```\s*$",
     re.IGNORECASE | re.MULTILINE,
 )
 KB_TABLE_PATTERN = re.compile(r"\bkasa_[a-z0-9_]+")
@@ -34,7 +34,12 @@ SQL_SYSTEM_PROMPT = """\
 사용자의 자연어 질문과 함께 주어진 테이블 스키마만을 근거로 SQL을 만든다.
 
 [출력 계약 — 반드시 준수]
-- 성공 시: 코드 펜스·설명·주석·마크다운 없이 `SELECT`로 시작하는 SQL 한 문장만 출력한다.
+- 성공 시: JSON 한 객체만 출력한다 (코드 펜스·설명·주석·마크다운 금지).
+  형식: {"sql": "SELECT ...", "key_column": "컬럼명"}
+  - sql: SELECT로 시작하는 SQL 한 문장.
+  - key_column: SELECT 절에서 결과 행을 고유하게 식별하는 대표 키 컬럼명.
+    별칭(AS)을 사용했다면 별칭을 적는다.
+    집계 쿼리(COUNT, SUM 등)처럼 식별 키가 없으면 null.
 - 스키마만으로 답할 수 없으면 `UNKNOWN: <사유>` 형식으로 한 줄만 출력한다.
   사유는 한국어로 간결히 (예: `UNKNOWN: kasa_offering_subscription에 종목코드 컬럼이 없음`,
   `UNKNOWN: 멤버 이메일을 참조하는 테이블이 주어지지 않음`).
@@ -134,7 +139,10 @@ def build_sql_prompt(
         "## 리터럴 (WHERE 절 등에 그대로 사용)\n"
         f"{literals_block}\n\n"
         "위 스키마에 정의된 테이블·컬럼만 사용해 질문에 답하는 "
-        "MySQL SELECT 문 하나만 출력하라. "
+        "JSON을 출력하라. "
+        '형식: {"sql": "SELECT ...", "key_column": "컬럼명"} '
+        "key_column은 SELECT 절에서 행을 식별하는 대표 키 컬럼명이다. "
+        "집계 쿼리라 식별 키가 없으면 null. "
         "질문에 명시된 식별자·코드·이름·날짜 등은 위 리터럴 목록에 "
         "있는 값을 그대로 사용한다. "
         "리터럴에 DABS 종목코드(예: `KR...`)와 종목명·건물명이 함께 "
@@ -166,6 +174,24 @@ def format_rows_for_tool_result(
     )
     suffix = " (상위 1000건만 표시)" if truncated else ""
     return f"결과 {len(rows)}건{suffix}: {rows_json}"
+
+
+def parse_sql_response(
+    text: str,
+) -> tuple[str | None, str | None]:
+    """LLM 응답에서 SQL과 key_column을 추출한다.
+
+    JSON 형식이면 sql/key_column을 파싱하고,
+    plain SQL이면 (sql, None)으로 폴백한다.
+    """
+    stripped = text.strip()
+    if stripped.startswith("{"):
+        try:
+            data = json.loads(stripped)
+            return data.get("sql"), data.get("key_column")
+        except json.JSONDecodeError:
+            pass
+    return stripped if stripped else None, None
 
 
 def extract_llm_text(response: Any) -> str:

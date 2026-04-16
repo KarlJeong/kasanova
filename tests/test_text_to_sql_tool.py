@@ -56,7 +56,11 @@ def mock_llm() -> MagicMock:
     llm = MagicMock()
     llm.ainvoke = AsyncMock(
         return_value=AIMessage(
-            content="SELECT COUNT(*) FROM kasa_member WHERE joined_at >= '2026-04-01'"
+            content=(
+                '{"sql": "SELECT COUNT(*) FROM kasa_member'
+                " WHERE joined_at >= '2026-04-01'\","
+                ' "key_column": null}'
+            )
         )
     )
     return llm
@@ -558,7 +562,11 @@ class TestErrorPaths:
     ) -> None:
         mock_llm.ainvoke = AsyncMock(
             return_value=AIMessage(
-                content="```sql\nSELECT 1\n```"
+                content=(
+                    '```json\n'
+                    '{"sql": "SELECT 1", "key_column": null}\n'
+                    '```'
+                )
             )
         )
         tool = _make_tool(

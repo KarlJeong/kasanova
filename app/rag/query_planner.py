@@ -33,13 +33,6 @@ class QueryPlan(BaseModel):
         default="",
         description="판단 이유 (로그용, 사람이 읽을 수 있게)",
     )
-    key_column: str | None = Field(
-        default=None,
-        description=(
-            "각 sub-query 결과의 결합 키 의미 타입. "
-            "사용자 관련이면 'member', DABS 관련이면 'dabs'."
-        ),
-    )
     combine: CombineOp | None = Field(
         default=None,
         description=(
@@ -56,8 +49,8 @@ class QueryPlan(BaseModel):
 _PLANNER_SYSTEM_PROMPT = """\
 너는 사내 데이터 질문을 받아 단계별 실행 계획을 세우는 query planner다.
 복잡한 멀티 조건 질문을 원자적 sub-question으로 분해해, 결과 행들을
-공통 키(예: member — 회원 식별 컬럼, dabs — 종목 식별 컬럼)로
-set 연산하여 결합할 수 있게 만든다.
+공통 키(예: 회원 식별 컬럼, 종목 식별 컬럼)로 set 연산하여 결합할 수
+있게 만든다. 실제 키 컬럼명은 SQL 생성 단계에서 자동으로 결정된다.
 
 [분해해야 하는 경우]
 - 같은 엔티티(예: 사용자, DABS)에 대해 **여러 독립 조건이 AND/OR/BUT NOT**으로 연결된 질문.
@@ -132,14 +125,9 @@ set 연산하여 결합할 수 있게 만든다.
 {
   "requires_decomposition": true | false,
   "reasoning": "왜 이렇게 판단했는지 한 줄 (한국어)",
-  "key_column": "member" | "dabs" | null,
   "combine": "intersect" | "union" | "difference" | null,
   "subqueries": ["sub-question 1", "sub-question 2", ...]
 }
-
-key_column은 의미 타입만 적는다. 실제 DB 컬럼명은 SQL 생성 단계에서 결정된다.
-- 회원 관련 질문이면 "member"
-- DABS/종목 관련 질문이면 "dabs"
 
 분해가 불필요하면 requires_decomposition=false로 두고 나머지는 null/빈배열로 둔다.
 JSON 외 다른 텍스트, 설명, 코드펜스 출력 금지.
@@ -255,14 +243,12 @@ async def plan_query(
             not plan.subqueries
             or len(plan.subqueries) < 2
             or plan.combine is None
-            or plan.key_column is None
         ):
             logger.warning(
                 "[query_planner] 분해 결정했으나 필드 부족"
-                " (subqueries=%d, combine=%s, key=%s) → 폴백",
+                " (subqueries=%d, combine=%s) → 폴백",
                 len(plan.subqueries),
                 plan.combine,
-                plan.key_column,
             )
             return QueryPlan(
                 requires_decomposition=False,
@@ -271,10 +257,9 @@ async def plan_query(
 
     logger.info(
         "[query_planner] decomposition=%s reason=%s"
-        " key=%s combine=%s sub_count=%d",
+        " combine=%s sub_count=%d",
         plan.requires_decomposition,
         plan.reasoning,
-        plan.key_column,
         plan.combine,
         len(plan.subqueries),
     )

@@ -40,6 +40,7 @@ from app.rag.text_to_sql_helpers import (
     extract_llm_text,
     format_rows_for_tool_result,
     format_schemas,
+    parse_sql_response,
     parse_unknown_reason,
     strip_code_fence,
     validate_sql,
@@ -70,6 +71,7 @@ class TextToSqlState(TypedDict, total=False):
 
     # generate_sql_node 출력
     sql: str | None
+    key_column: str | None  # SQL SELECT의 대표 키 컬럼명
 
     # execute_sql_node 출력
     rows: list[dict[str, Any]] | None
@@ -264,12 +266,9 @@ def _make_generate_sql_node(deps: TextToSqlDeps):
             ]
         )
         raw_response = extract_llm_text(sql_response)
-        # logger.info(
-        #     "[generate_sql] LLM 원본 응답: %s", raw_response
-        # )
-        sql = strip_code_fence(raw_response)
+        cleaned = strip_code_fence(raw_response)
 
-        unknown_reason = parse_unknown_reason(sql)
+        unknown_reason = parse_unknown_reason(cleaned)
         if unknown_reason is not None:
             logger.warning(
                 "[generate_sql] SQL 생성 실패 (UNKNOWN): %s"
@@ -281,14 +280,20 @@ def _make_generate_sql_node(deps: TextToSqlDeps):
             )
             return {"sql": None, "error": CANNOT_ANSWER}
 
-        if not validate_sql(sql):
+        sql, key_column = parse_sql_response(cleaned)
+
+        if not validate_sql(sql or ""):
             logger.warning(
                 "[generate_sql] SQL 검증 실패: %s", sql
             )
             return {"sql": None, "error": CANNOT_ANSWER}
 
-        logger.info("[generate_sql] 생성 SQL: %s", sql)
-        return {"sql": sql}
+        logger.info(
+            "[generate_sql] 생성 SQL: %s (key_column=%s)",
+            sql,
+            key_column,
+        )
+        return {"sql": sql, "key_column": key_column}
 
     return generate_sql_node
 

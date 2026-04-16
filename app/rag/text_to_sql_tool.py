@@ -5,7 +5,7 @@
 
 1. `query_planner.plan_query()`로 분해 필요 여부 판단
 2. 분해 경로에서 각 sub-query를 독립적으로 subgraph에 태워 병렬
-   실행하고, 결과 row들을 `key_column` 기준 set 연산으로 결합
+   실행하고, SQL 생성 시 LLM이 결정한 key_column 기준 set 연산으로 결합
 
 분해가 필요 없으면 subgraph 1회 호출로 기존 동작과 동일하게 작동.
 """
@@ -44,63 +44,20 @@ from app.rag.text_to_sql_helpers import (  # noqa: F401
 
 logger = logging.getLogger(__name__)
 
-# ── key_column 의미 타입 → 실제 컬럼명 매핑 ────────────────────────
-_KEY_COLUMN_PATTERNS: dict[str, list[str]] = {
-    "member": [
-        "member_id", "member_uuid", "uuid", "id",
-    ],
-    "dabs": [
-        "dabs_code", "code", "dabs_id",
-    ],
-}
-
-
-def _resolve_key_column(
-    expected: str,
-    columns: list[str],
-) -> str | None:
-    """planner의 key_column(의미 타입)을 실제 결과 컬럼에 매핑한다.
-
-    Returns:
-        매핑된 실제 컬럼명. 매핑 실패 시 None.
-    """
-    # 1) 정확 일치 (기존 호환)
-    if expected in columns:
-        return expected
-
-    # 2) 결과가 단일 컬럼이면 그대로 사용
-    if len(columns) == 1:
-        return columns[0]
-
-    # 3) 의미 타입 기반 매핑 (member → uuid, dabs → dabs_code 등)
-    candidates = _KEY_COLUMN_PATTERNS.get(expected.lower(), [])
-    for candidate in candidates:
-        if candidate in columns:
-            return candidate
-
-    # 4) 접미사 매칭 (member_uuid → uuid 등)
-    exp_parts = expected.lower().split("_")
-    for col in columns:
-        col_parts = col.lower().split("_")
-        if col_parts[-len(exp_parts):] == exp_parts:
-            return col
-        if exp_parts[-len(col_parts):] == col_parts:
-            return col
-
-    return None
-
 
 async def _run_subgraph_for_rows(
     graph: CompiledStateGraph,
     query: str,
     literals: list[str],
-) -> tuple[list[dict[str, Any]] | None, str | None]:
+) -> tuple[
+    list[dict[str, Any]] | None, str | None, str | None
+]:
     """subgraph를 한 번 호출하고 최종 state에서 rows를 뽑아 반환.
 
     Returns:
-        (rows, error_message)
-        - 성공: (rows, None) — rows는 빈 리스트일 수 있음
-        - 실패: (None, error_message)
+        (rows, key_column, error_message)
+        - 성공: (rows, key_column, None)
+        - 실패: (None, None, error_message)
     """
     initial_state: TextToSqlState = {
         "query": query,
@@ -115,17 +72,18 @@ async def _run_subgraph_for_rows(
             query,
             literals,
         )
-        return None, CANNOT_ANSWER
+        return None, None, CANNOT_ANSWER
 
     # graph 내부가 error를 state["error"]로 표시한 경우
     err = final_state.get("error")
     if err:
-        return None, err
+        return None, None, err
 
     rows = final_state.get("rows")
     if rows is None:
-        return None, CANNOT_ANSWER
-    return rows, None
+        return None, None, CANNOT_ANSWER
+    key_column = final_state.get("key_column")
+    return rows, key_column, None
 
 
 async def _execute_decomposed(
@@ -135,15 +93,12 @@ async def _execute_decomposed(
 ) -> str:
     """plan에 따라 sub-query들을 subgraph에 병렬 태우고 결합한다."""
     assert plan.requires_decomposition
-    assert plan.key_column is not None
     assert plan.combine is not None
-    key = plan.key_column
 
     logger.info(
         "[_execute_decomposed] 분해 실행 시작:"
-        " %d개 sub-query, key=%s, combine=%s",
+        " %d개 sub-query, combine=%s",
         len(plan.subqueries),
-        key,
         plan.combine,
     )
 
@@ -175,7 +130,7 @@ async def _execute_decomposed(
 
     key_sets: list[set[Any]] = []
     sub_row_lists: list[list[dict[str, Any]]] = []
-    resolved_keys: list[str] = []  # sub별 실제 컬럼명
+    resolved_keys: list[str] = []  # sub별 key 컬럼명
     for i, result in enumerate(sub_results, 1):
         sub = plan.subqueries[i - 1]
         if isinstance(result, BaseException):
@@ -187,7 +142,7 @@ async def _execute_decomposed(
             )
             return CANNOT_ANSWER
 
-        rows, err = result
+        rows, key_col, err = result
         if rows is None:
             logger.warning(
                 "[_execute_decomposed] sub[%d] 실패: %s | sub=%r",
@@ -204,44 +159,38 @@ async def _execute_decomposed(
             )
             key_sets.append(set())
             sub_row_lists.append([])
-            resolved_keys.append(key)
+            resolved_keys.append(key_col or "")
             continue
 
-        resolved = _resolve_key_column(key, list(rows[0].keys()))
-        if resolved is None:
+        # key_column이 없거나 결과에 해당 컬럼이 없으면 실패
+        columns = list(rows[0].keys())
+        if not key_col or key_col not in columns:
             logger.warning(
-                "[_execute_decomposed] sub[%d] key 컬럼 %r 해소 실패"
-                " (있는 컬럼: %s) | sub=%r",
+                "[_execute_decomposed] sub[%d] key 컬럼 %r이(가)"
+                " 결과에 없음 (있는 컬럼: %s) | sub=%r",
                 i,
-                key,
-                list(rows[0].keys()),
+                key_col,
+                columns,
                 sub,
             )
             return CANNOT_ANSWER
-        if resolved != key:
-            logger.info(
-                "[_execute_decomposed] sub[%d] key 컬럼 매핑:"
-                " %r → %r",
-                i,
-                key,
-                resolved,
-            )
 
-        resolved_keys.append(resolved)
+        resolved_keys.append(key_col)
         keys = {
-            row[resolved]
+            row[key_col]
             for row in rows
-            if row.get(resolved) is not None
+            if row.get(key_col) is not None
         }
         key_sets.append(keys)
         sub_row_lists.append(rows)
         logger.info(
             "[_execute_decomposed] sub[%d/%d] 완료:"
-            " %d행, %d개 키 | sub=%r",
+            " %d행, %d개 키 (key_column=%s) | sub=%r",
             i,
             len(plan.subqueries),
             len(rows),
             len(keys),
+            key_col,
             sub,
         )
 
@@ -255,8 +204,7 @@ async def _execute_decomposed(
     if not final_keys:
         return NO_DATA
 
-    # 첫 sub의 실제 컬럼명 사용
-    primary_key = resolved_keys[0] if resolved_keys else key
+    primary_key = resolved_keys[0]
     primary_rows = sub_row_lists[0]
     filtered = [
         r for r in primary_rows if r.get(primary_key) in final_keys
