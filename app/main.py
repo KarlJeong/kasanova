@@ -15,6 +15,7 @@ from sqlalchemy import text
 
 from redis.asyncio import Redis
 
+from app.api.chat import router as chat_router
 from app.api.index_router import router as index_router
 from app.api.slack import router as slack_router
 from app.core.config import get_settings
@@ -146,6 +147,7 @@ app = FastAPI(
 
 app.include_router(slack_router)
 app.include_router(index_router)
+app.include_router(chat_router)
 
 
 @app.get("/health")
