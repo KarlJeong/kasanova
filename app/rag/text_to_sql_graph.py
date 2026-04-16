@@ -64,6 +64,7 @@ class TextToSqlState(TypedDict, total=False):
     # 입력 (그래프 시작 시 채워짐)
     query: str
     literals: list[str]
+    query_label: str  # 로그 접두사 (예: "Q1/3") — 분해 시 구분용
 
     # retrieve_context_node 출력
     schemas: list[dict[str, Any]]
@@ -122,15 +123,18 @@ def _make_retrieve_context_node(deps: TextToSqlDeps):
         state: TextToSqlState,
     ) -> dict[str, Any]:
         query = state["query"]
+        lbl = state.get("query_label", "")
+        pfx = f"[{lbl}][retrieve_context]" if lbl else "[retrieve_context]"
         logger.info(
-            "[retrieve_context] query=%r literals=%r",
+            "%s query=%r literals=%r",
+            pfx,
             query,
             state.get("literals", []),
         )
 
         # 스키마와 KB를 병렬 조회 (둘 다 같은 query 기반).
         schemas_result, kb_result = await asyncio.gather(
-            deps.schema_searcher.search(query),
+            deps.schema_searcher.search(query, log_prefix=lbl),
             deps.kb_searcher.fetch_best_docs(
                 query, category="kb"
             ),
@@ -139,7 +143,7 @@ def _make_retrieve_context_node(deps: TextToSqlDeps):
 
         if isinstance(schemas_result, BaseException):
             logger.exception(
-                "[retrieve_context] 스키마 조회 실패",
+                "%s 스키마 조회 실패", pfx,
                 exc_info=schemas_result,
             )
             return {"error": CANNOT_ANSWER}
@@ -147,7 +151,7 @@ def _make_retrieve_context_node(deps: TextToSqlDeps):
 
         if isinstance(kb_result, BaseException):
             logger.exception(
-                "[retrieve_context] KB 조회 실패",
+                "%s KB 조회 실패", pfx,
                 exc_info=kb_result,
             )
             kb_docs: list[dict[str, Any]] = []
@@ -155,7 +159,7 @@ def _make_retrieve_context_node(deps: TextToSqlDeps):
             kb_docs = kb_result
 
         if not schemas:
-            logger.info("[retrieve_context] 관련 스키마 없음")
+            logger.info("%s 관련 스키마 없음", pfx)
             return {
                 "schemas": [],
                 "kb_docs": kb_docs,
@@ -163,7 +167,8 @@ def _make_retrieve_context_node(deps: TextToSqlDeps):
             }
 
         logger.info(
-            "[retrieve_context] 스키마 %d개 후보 (RAG): %s",
+            "%s 스키마 %d개 후보 (RAG): %s",
+            pfx,
             len(schemas),
             [s["table_name"] for s in schemas],
         )
@@ -182,9 +187,10 @@ def _make_retrieve_context_node(deps: TextToSqlDeps):
                     kb_union.append(t)
                     added += 1
                 logger.info(
-                    "[retrieve_context] KB 문서 [%d/%d] %s"
+                    "%s KB 문서 [%d/%d] %s"
                     " (score=%.4f) → 테이블 %d개 언급,"
                     " 신규 %d개",
+                    pfx,
                     idx,
                     len(kb_docs),
                     doc["source"],
@@ -198,8 +204,9 @@ def _make_retrieve_context_node(deps: TextToSqlDeps):
                 t for t in kb_union if t not in existing
             ][:MAX_KB_PINNED_TABLES]
             logger.info(
-                "[retrieve_context] KB 합집합 %d개,"
+                "%s KB 합집합 %d개,"
                 " 기존 후보 외 %d개 보강 시도: %s",
+                pfx,
                 len(kb_union),
                 len(missing),
                 missing,
@@ -207,14 +214,15 @@ def _make_retrieve_context_node(deps: TextToSqlDeps):
             if missing:
                 extra = (
                     await deps.schema_searcher.fetch_schemas_by_names(
-                        missing
+                        missing, log_prefix=lbl,
                     )
                 )
                 if extra:
                     schemas = schemas + extra
                     logger.info(
-                        "[retrieve_context] KB 기반 보강 후"
+                        "%s KB 기반 보강 후"
                         " 스키마 %d개: %s",
+                        pfx,
                         len(schemas),
                         [s["table_name"] for s in schemas],
                     )
@@ -232,6 +240,8 @@ def _make_generate_sql_node(deps: TextToSqlDeps):
         literals = state.get("literals", [])
         schemas = state.get("schemas", [])
         kb_docs = state.get("kb_docs", [])
+        lbl = state.get("query_label", "")
+        pfx = f"[{lbl}][generate_sql]" if lbl else "[generate_sql]"
 
         # 본문 주입은 top-1만 (멀티 도메인이라도 하나만 주입해
         # 프롬프트 비대화/혼동을 막는다).
@@ -239,9 +249,10 @@ def _make_generate_sql_node(deps: TextToSqlDeps):
             primary = kb_docs[0]
             domain_knowledge = primary["content"]
             logger.info(
-                "[generate_sql] 도메인 지식 본문 주입 (top-1):"
+                "%s 도메인 지식 본문 주입 (top-1):"
                 " %s (청크 %d개, %d자, score=%.4f)"
                 " [총 KB %d개 중]",
+                pfx,
                 primary["source"],
                 primary["chunk_count"],
                 len(domain_knowledge),
@@ -250,7 +261,7 @@ def _make_generate_sql_node(deps: TextToSqlDeps):
             )
         else:
             domain_knowledge = ""
-            logger.info("[generate_sql] 도메인 지식 없음")
+            logger.info("%s 도메인 지식 없음", pfx)
 
         schemas_text = format_schemas(schemas)
         sql_user_prompt = build_sql_prompt(
@@ -271,8 +282,9 @@ def _make_generate_sql_node(deps: TextToSqlDeps):
         unknown_reason = parse_unknown_reason(cleaned)
         if unknown_reason is not None:
             logger.warning(
-                "[generate_sql] SQL 생성 실패 (UNKNOWN): %s"
+                "%s SQL 생성 실패 (UNKNOWN): %s"
                 " | query=%r literals=%r 후보 스키마=%s",
+                pfx,
                 unknown_reason,
                 query,
                 literals,
@@ -284,12 +296,13 @@ def _make_generate_sql_node(deps: TextToSqlDeps):
 
         if not validate_sql(sql or ""):
             logger.warning(
-                "[generate_sql] SQL 검증 실패: %s", sql
+                "%s SQL 검증 실패: %s", pfx, sql
             )
             return {"sql": None, "error": CANNOT_ANSWER}
 
         logger.info(
-            "[generate_sql] 생성 SQL: %s (key_column=%s)",
+            "%s 생성 SQL: %s (key_column=%s)",
+            pfx,
             sql,
             key_column,
         )
@@ -307,7 +320,9 @@ def _make_execute_sql_node(deps: TextToSqlDeps):
             # 정상 경로에서는 도달하지 않음 (라우팅이 막아줌).
             return {"error": CANNOT_ANSWER}
 
-        logger.info("[execute_sql] MySQL 실행: %s", sql)
+        lbl = state.get("query_label", "")
+        pfx = f"[{lbl}][execute_sql]" if lbl else "[execute_sql]"
+        logger.info("%s MySQL 실행: %s", pfx, sql)
         rows = await deps.mysql_client.execute_select(sql)
         if rows is None:
             return {"rows": None, "error": CANNOT_ANSWER}
@@ -320,10 +335,12 @@ def _make_format_result_node():
     async def format_result_node(
         state: TextToSqlState,
     ) -> dict[str, Any]:
+        lbl = state.get("query_label", "")
+        pfx = f"[{lbl}][format_result]" if lbl else "[format_result]"
         # 단락 회로 — error가 있으면 그대로 반환
         if state.get("error"):
             err = state["error"]
-            logger.info("[format_result] 에러 경로: %s", err)
+            logger.info("%s 에러 경로: %s", pfx, err)
             return {"final_result": err}
 
         rows = state.get("rows")
@@ -334,7 +351,7 @@ def _make_format_result_node():
 
         result_str = format_rows_for_tool_result(rows)
         logger.info(
-            "[format_result] tool 결과: %s", result_str[:300]
+            "%s tool 결과: %s", pfx, result_str[:300]
         )
         return {"final_result": result_str}
 

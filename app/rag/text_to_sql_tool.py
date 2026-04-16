@@ -49,6 +49,7 @@ async def _run_subgraph_for_rows(
     graph: CompiledStateGraph,
     query: str,
     literals: list[str],
+    query_label: str = "",
 ) -> tuple[
     list[dict[str, Any]] | None, str | None, str | None
 ]:
@@ -62,6 +63,7 @@ async def _run_subgraph_for_rows(
     initial_state: TextToSqlState = {
         "query": query,
         "literals": literals,
+        "query_label": query_label,
     }
     try:
         final_state = await graph.ainvoke(initial_state)
@@ -120,10 +122,14 @@ async def _execute_decomposed(
                 missing,
             )
 
+    total = len(plan.subqueries)
     sub_results = await asyncio.gather(
         *[
-            _run_subgraph_for_rows(graph, sub, literals)
-            for sub in plan.subqueries
+            _run_subgraph_for_rows(
+                graph, sub, literals,
+                query_label=f"Q{i}/{total}",
+            )
+            for i, sub in enumerate(plan.subqueries, 1)
         ],
         return_exceptions=True,
     )
