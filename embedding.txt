@@ -122,6 +122,7 @@ curl -X POST http://localhost:8000/index/documents -F "file=@/Users/karl-jeong/k
 curl -X POST http://localhost:8000/index/documents -F "file=@/Users/karl-jeong/kasa/kasanova/RAG/kb/offering_subscription_process.md" -F "category=kb"
 curl -X POST http://localhost:8000/index/documents -F "file=@/Users/karl-jeong/kasa/kasanova/RAG/kb/pick_and_talk_event_process.md" -F "category=kb"
 curl -X POST http://localhost:8000/index/documents -F "file=@/Users/karl-jeong/kasa/kasanova/RAG/kb/signup_status_state_machine.md" -F "category=kb"
+curl -X POST http://localhost:8000/index/documents -F "file=@/Users/karl-jeong/kasa/kasanova/RAG/kb/terms_agreement_process.md" -F "category=kb"
 
 
 curl -X POST http://localhost:8000/index/schema/documents -F "file=@/Users/karl-jeong/kasa/kasanova/RAG/kasaapi_schema/merged_schema.jsonl"

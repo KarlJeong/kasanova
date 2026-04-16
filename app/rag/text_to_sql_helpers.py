@@ -26,7 +26,7 @@ KB_TABLE_PATTERN = re.compile(r"\bkasa_[a-z0-9_]+")
 
 CANNOT_ANSWER = "조회할 수 없습니다"
 NO_DATA = "조회된 데이터가 없습니다"
-MAX_PREVIEW_ROWS = 10
+MAX_PREVIEW_ROWS = 1000
 MAX_KB_PINNED_TABLES = 8
 
 SQL_SYSTEM_PROMPT = """\
@@ -48,6 +48,7 @@ SQL_SYSTEM_PROMPT = """\
 - "목록"·"최근"·"상위" 류 질문은 `ORDER BY`와 적절한 `LIMIT`을 반드시 포함한다.
 - datetime 비교는 KST 기준이며, `datetime(6)` 컬럼은 문자열 리터럴(예: '2026-04-14 00:00:00')로 비교한다.
 - 문자열 매칭은 기본적으로 `=`을 사용하고, 부분 일치가 필요한 경우에만 `LIKE`를 사용한다.
+- 식별자 우선순위: 동일 대상에 대해 **코드**(예: DABS 종목코드 `KR...`)와 **이름**(종목명·건물명·프로젝트명 등)이 모두 리터럴로 주어지면 **반드시 코드 컬럼으로만 필터링**한다. 이 경우 이름 컬럼은 `=`·`LIKE`·`IN` 어디에도 사용하지 않는다. 코드가 없고 이름만 주어진 경우에 한해 이름 컬럼으로 필터링한다.
 - 집계 질문은 SELECT 절의 non-aggregate 컬럼을 모두 `GROUP BY`에 포함한다.
 - 가독성을 위해 여러 테이블을 다룰 때 테이블 별칭을 사용한다.
 - MySQL 8.x 방언만 사용한다. 타 DB 방언 함수(`DATE_TRUNC`, `TO_DATE` 등) 금지.
@@ -136,6 +137,9 @@ def build_sql_prompt(
         "MySQL SELECT 문 하나만 출력하라. "
         "질문에 명시된 식별자·코드·이름·날짜 등은 위 리터럴 목록에 "
         "있는 값을 그대로 사용한다. "
+        "리터럴에 DABS 종목코드(예: `KR...`)와 종목명·건물명이 함께 "
+        "있으면 **코드 컬럼으로만** 필터링하고 이름 컬럼은 사용하지 "
+        "말라. 코드가 없을 때에 한해 이름으로 필터링한다. "
         "도메인 참고 블록은 테이블·JOIN 선택이 모호할 때만 참고용으로 "
         "활용하고, 질문과 관련 없어 보이면 완전히 무시하라. "
         "스키마만으로 답할 수 없으면 정확히 `UNKNOWN`만 출력하라."
@@ -160,7 +164,7 @@ def format_rows_for_tool_result(
     rows_json = json.dumps(
         preview, ensure_ascii=False, default=str
     )
-    suffix = " (상위 10건만 표시)" if truncated else ""
+    suffix = " (상위 1000건만 표시)" if truncated else ""
     return f"결과 {len(rows)}건{suffix}: {rows_json}"
 
 

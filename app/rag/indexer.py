@@ -123,19 +123,13 @@ class DocumentIndexer:
         actions: list[dict[str, Any]] = []
         table_summaries: list[dict[str, Any]] = []
 
-        all_texts: list[str] = []
-        per_row_chunks: list[list[str]] = []
-        for row in rows:
-            row_chunks = split_schema_row(row.full_text)
-            per_row_chunks.append(row_chunks)
-            all_texts.extend(row_chunks)
+        all_texts = [row.full_text for row in rows]
 
         embeddings = await asyncio.to_thread(
             self.embedder.encode, all_texts
         )
 
-        cursor = 0
-        for row, row_chunks in zip(rows, per_row_chunks):
+        for i, row in enumerate(rows):
             doc_id = row.table_name
             await self.os_client.delete_by_query(
                 index=self.index_name,
@@ -143,32 +137,28 @@ class DocumentIndexer:
                     "query": {"term": {"doc_id": doc_id}}
                 },
             )
-            for chunk_index, text in enumerate(row_chunks):
-                actions.append(
-                    {
-                        "_index": self.index_name,
-                        "_source": {
-                            "doc_id": doc_id,
-                            "chunk_index": chunk_index,
-                            "content": text,
-                            "embedding": embeddings[
-                                cursor + chunk_index
-                            ],
-                            "metadata": {
-                                "filename": filename,
-                                "file_type": "jsonl",
-                                "indexed_at": indexed_at,
-                                "table_name": row.table_name,
-                                "has_yaml": row.has_yaml,
-                            },
+            actions.append(
+                {
+                    "_index": self.index_name,
+                    "_source": {
+                        "doc_id": doc_id,
+                        "chunk_index": 0,
+                        "content": row.full_text,
+                        "embedding": embeddings[i],
+                        "metadata": {
+                            "filename": filename,
+                            "file_type": "jsonl",
+                            "indexed_at": indexed_at,
+                            "table_name": row.table_name,
+                            "has_yaml": row.has_yaml,
                         },
-                    }
-                )
-            cursor += len(row_chunks)
+                    },
+                }
+            )
             table_summaries.append(
                 {
                     "table_name": row.table_name,
-                    "chunks": len(row_chunks),
+                    "chunks": 1,
                 }
             )
 

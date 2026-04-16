@@ -29,7 +29,7 @@ class SchemaSearcher:
         self, query: str
     ) -> list[dict[str, Any]]:
         logger.info("[schema_searcher] query=%r", query)
-        raw_hits = await self.hybrid.search(query, top_k=10)
+        raw_hits = await self.hybrid.search(query, top_k=20)
 
         # 같은 doc_id의 여러 청크가 상위를 도배하지 않도록 dedup.
         # 첫 등장(=최고 점수)만 남긴다.

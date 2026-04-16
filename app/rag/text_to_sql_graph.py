@@ -5,8 +5,12 @@
 대한 schema 검색 → KB 보강 → SQL 생성 → 검증 → 실행 → 결과 포맷
 파이프라인을 그대로 옮기되, 각 단계가 독립 노드가 된다.
 
-분해 경로(Pattern B)는 이번 PR에 포함되지 않는다. 다음 단계에서
-이 그래프 위에 plan/decompose/combine 노드를 얹는다.
+분해 경로(Pattern B)는 이 subgraph 안이 아니라 `text_to_sql_tool.py`
+wrapper 레이어에서 처리한다. wrapper가 `query_planner.plan_query()`로
+분해 여부를 결정한 뒤, sub-query마다 이 subgraph를 독립적으로 태우고
+결과 rows를 코드가 set 연산으로 결합한다. 이렇게 두면 subgraph는
+"단일 조건 쿼리 1회 실행" 의미를 유지할 수 있어 재사용·테스트가
+깔끔해진다.
 
 상태(state) 필드는 노드 사이의 유일한 통신 채널이다. 닫힘(closure)
 대신 명시적 상태를 쓰는 것이 디버깅·테스트·향후 확장(분해 경로의
@@ -260,9 +264,9 @@ def _make_generate_sql_node(deps: TextToSqlDeps):
             ]
         )
         raw_response = extract_llm_text(sql_response)
-        logger.info(
-            "[generate_sql] LLM 원본 응답: %s", raw_response
-        )
+        # logger.info(
+        #     "[generate_sql] LLM 원본 응답: %s", raw_response
+        # )
         sql = strip_code_fence(raw_response)
 
         unknown_reason = parse_unknown_reason(sql)

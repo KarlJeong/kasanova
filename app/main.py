@@ -98,8 +98,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             schema_hybrid,
             pinned_doc_ids=[
                 "kasa_ledger_dabs",
+                "kasa_member"
             ],
-            excluded_doc_ids=["kasa_personal_data"],
+            excluded_doc_ids=[],
         )
         logger.info("하이브리드 검색기 준비 완료")
 

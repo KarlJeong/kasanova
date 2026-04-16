@@ -126,7 +126,7 @@ class TestHappyPath:
         assert '"name": "a"' in result
         assert "SELECT" not in result
 
-    async def test_truncates_at_10_rows(
+    async def test_truncates_at_max_rows(
         self,
         mock_schema_searcher,
         mock_kb_searcher,
@@ -135,7 +135,7 @@ class TestHappyPath:
     ) -> None:
         mock_mysql_client.execute_select = AsyncMock(
             return_value=[
-                {"id": i} for i in range(25)
+                {"id": i} for i in range(1500)
             ]
         )
         tool = _make_tool(
@@ -145,8 +145,8 @@ class TestHappyPath:
             mock_llm,
         )
         result = await tool.ainvoke({"query": "목록"})
-        assert "결과 25건" in result
-        assert "상위 10건만 표시" in result
+        assert "결과 1500건" in result
+        assert "상위 1000건만 표시" in result
 
     async def test_kb_searcher_called_with_kb_category(
         self,
