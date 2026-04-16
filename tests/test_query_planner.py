@@ -49,7 +49,7 @@ class TestPlanQuery:
                 content=(
                     '{"requires_decomposition": true,'
                     ' "reasoning": "세 조건 AND",'
-                    ' "key_column": "member_id",'
+                    ' '
                     ' "combine": "intersect",'
                     ' "subqueries": ['
                     '"sub1", "sub2", "sub3"]}'
@@ -63,7 +63,6 @@ class TestPlanQuery:
         )
         assert plan.requires_decomposition is True
         assert plan.combine == "intersect"
-        assert plan.key_column == "member_id"
         assert len(plan.subqueries) == 3
 
     async def test_single_condition_not_decomposed(
@@ -74,8 +73,7 @@ class TestPlanQuery:
                 content=(
                     '{"requires_decomposition": false,'
                     ' "reasoning": "단일 카운트 질문",'
-                    ' "key_column": null,'
-                    ' "combine": null,'
+                                        ' "combine": null,'
                     ' "subqueries": []}'
                 )
             )
@@ -96,8 +94,7 @@ class TestPlanQuery:
                     '```json\n'
                     '{"requires_decomposition": false,'
                     ' "reasoning": "x",'
-                    ' "key_column": null,'
-                    ' "combine": null,'
+                                        ' "combine": null,'
                     ' "subqueries": []}\n'
                     '```'
                 )
@@ -116,7 +113,7 @@ class TestPlanQuery:
                     "분석 결과:\n"
                     '{"requires_decomposition": true,'
                     ' "reasoning": "교집합",'
-                    ' "key_column": "member_id",'
+                    ' '
                     ' "combine": "intersect",'
                     ' "subqueries": ["a", "b"]}\n'
                     "이상입니다."
@@ -148,7 +145,7 @@ class TestPlanQuery:
                 content=(
                     '{"requires_decomposition": true,'
                     ' "reasoning": "x",'
-                    ' "key_column": "member_id",'
+                    ' '
                     ' "combine": "intersect",'
                     ' "subqueries": []}'
                 )
@@ -165,7 +162,7 @@ class TestPlanQuery:
                 content=(
                     '{"requires_decomposition": true,'
                     ' "reasoning": "x",'
-                    ' "key_column": "member_id",'
+                    ' '
                     ' "combine": null,'
                     ' "subqueries": ["a", "b"]}'
                 )
@@ -189,5 +186,4 @@ class TestQueryPlanModel:
     def test_default_no_decomposition(self) -> None:
         plan = QueryPlan(requires_decomposition=False)
         assert plan.combine is None
-        assert plan.key_column is None
         assert plan.subqueries == []

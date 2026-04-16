@@ -76,7 +76,10 @@ def mock_llm() -> MagicMock:
     llm = MagicMock()
     llm.ainvoke = AsyncMock(
         return_value=AIMessage(
-            content="SELECT COUNT(*) FROM kasa_member"
+            content=(
+                '{"sql": "SELECT COUNT(*) FROM kasa_member",'
+                ' "key_column": null}'
+            )
         )
     )
     return llm
@@ -203,6 +206,7 @@ class TestGenerateSqlNode:
         assert result.get("sql") is not None
         assert result["sql"].startswith("SELECT")
         assert result.get("error") is None
+        assert "key_column" in result
 
     async def test_unknown_response_sets_error(
         self, deps, mock_llm
@@ -253,7 +257,11 @@ class TestGenerateSqlNode:
     ) -> None:
         mock_llm.ainvoke = AsyncMock(
             return_value=AIMessage(
-                content="```sql\nSELECT 1\n```"
+                content=(
+                    '```json\n'
+                    '{"sql": "SELECT 1", "key_column": null}\n'
+                    '```'
+                )
             )
         )
         node = _make_generate_sql_node(deps)
