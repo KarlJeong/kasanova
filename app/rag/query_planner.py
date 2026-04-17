@@ -21,6 +21,21 @@ from pydantic import BaseModel, Field, ValidationError
 logger = logging.getLogger(__name__)
 
 CombineOp = Literal["intersect", "union", "difference"]
+SubQueryRole = Literal["filter", "data"]
+
+
+class SubQuery(BaseModel):
+    """분해된 개별 서브쿼리."""
+
+    query: str = Field(
+        description="원자적 sub-question. 한국어 자연어.",
+    )
+    role: SubQueryRole = Field(
+        description=(
+            "filter=set 연산에 참여하는 필터 조건, "
+            "data=추가 데이터 조회 전용 (set 연산 미참여)"
+        ),
+    )
 
 
 class QueryPlan(BaseModel):
@@ -40,16 +55,9 @@ class QueryPlan(BaseModel):
             "union=합집합(OR), difference=차집합(BUT NOT)"
         ),
     )
-    subqueries: list[str] = Field(
+    subqueries: list[SubQuery] = Field(
         default_factory=list,
-        description="원자적 sub-question들 (필터용). 한국어 자연어.",
-    )
-    enrichment_queries: list[str] = Field(
-        default_factory=list,
-        description=(
-            "필터가 아닌 추가 데이터 조회용 sub-question들. "
-            "최종 필터 결과에 보강 정보를 붙일 때 사용."
-        ),
+        description="원자적 sub-question들. 각각 role을 가진다.",
     )
 
 
@@ -59,11 +67,16 @@ _PLANNER_SYSTEM_PROMPT = """\
 공통 키(예: 회원 식별 컬럼, 종목 식별 컬럼)로 set 연산하여 결합할 수
 있게 만든다. 실제 키 컬럼명은 SQL 생성 단계에서 자동으로 결정된다.
 
+모든 서브쿼리는 **병렬로 한 번에 실행**되므로, 필터 조건이든 추가
+데이터 조회든 하나의 subqueries 배열에 넣되 role로 구분한다.
+
 [분해해야 하는 경우]
 - 같은 엔티티(예: 사용자, DABS)에 대해 **여러 독립 조건이 AND/OR/BUT NOT**으로 연결된 질문.
 - 예: "A를 청약하고 B를 보유 중이며 C 배당 수령한 사용자" → AND(intersect)
 - 예: "A 또는 B를 청약한 사용자" → OR(union)
 - 예: "A는 청약했지만 B는 안 한 사용자" → BUT NOT(difference)
+- 필터 조건 외에 **추가로 조회해야 할 데이터**(예: "의결권수를 알려줘")가 있는 경우,
+  해당 조회도 role="data"인 서브쿼리로 함께 분해한다.
 
 [분해하지 말아야 하는 경우]
 - 단일 조건 질문. 예: "이번 달 신규 가입 회원 수"
@@ -71,16 +84,23 @@ _PLANNER_SYSTEM_PROMPT = """\
 - 단순 aggregation. 예: "DABS별 거래 금액 합계"
 - 정렬·상한만 다른 조회. 예: "거래 금액 상위 10명"
 
+[서브쿼리 role]
+- "filter": set 연산(intersect/union/difference)에 참여하는 필터 조건.
+  반드시 2개 이상이어야 한다.
+- "data": set 연산에 참여하지 않는 추가 데이터 조회.
+  필터 결과(최종 키 집합)에 보강 정보를 붙이는 용도.
+  원 질문이 추가 데이터 조회를 요구하지 않으면 생략한다.
+
 [분해 규칙]
-- 각 sub-question은 **정확히 하나의 독립 조건만** 담아야 한다.
-  복수 조건을 하나의 sub-question에 묶으면 안 된다.
+- 각 sub-question은 **정확히 하나의 독립 조건(또는 하나의 데이터 항목)**만
+  담아야 한다. 복수 조건을 하나의 sub-question에 묶으면 안 된다.
 - sub-question 본문은 한국어 자연어로 자연스럽게 쓰되, 결과로 어떤 키
-  (회원 식별값, 종목 코드 등)를 반환해야 하는지 명시.
+  (회원 식별값, 종목 코드 등)와 어떤 데이터 항목을 반환해야 하는지 명시.
 - 결합 키는 모든 sub-question에서 동일한 의미여야 한다
   (예: 모두 회원 식별값, 또는 모두 DABS 코드).
 - combine은 질문의 논리 접속사로 결정: "그리고/하고/이며/이면서" → intersect,
   "또는/이거나" → union, "했지만 ~ 안 한" → difference.
-- subqueries는 최소 2개, 최대 5개.
+- subqueries(filter role)는 최소 2개, 전체(filter + data)는 최대 7개.
 
 [원자적 분해 — 매우 중요]
   원 질문이 N개의 독립 조건을 가지면 반드시 N개의 sub-question으로 분해하라.
@@ -89,16 +109,16 @@ _PLANNER_SYSTEM_PROMPT = """\
 
   잘못된 분해 (조건 합침 — 절대 금지):
       원 질문: "공유증권 멤버 중 마케팅 동의하고 특정 DABS 보유한 회원"
-      X ["공유증권 멤버 중 마케팅 동의한 회원 목록",
-          "공유증권 멤버 중 특정 DABS 보유 회원 목록"]
+      X [{"query": "공유증권 멤버 중 마케팅 동의한 회원 목록", "role": "filter"},
+          {"query": "공유증권 멤버 중 특정 DABS 보유 회원 목록", "role": "filter"}]
       → "공유증권 멤버" 조건이 양쪽에 중복. 각 SQL이 이를
          서로 다르게 해석할 위험이 있다.
 
   올바른 분해:
       원 질문: "공유증권 멤버 중 마케팅 동의하고 특정 DABS 보유한 회원"
-      O ["공유증권 멤버인 회원 목록",
-          "마케팅 동의한 회원 목록",
-          "특정 DABS를 보유하고 있는 회원 목록"]
+      O [{"query": "공유증권 멤버인 회원 목록", "role": "filter"},
+          {"query": "마케팅 동의한 회원 목록", "role": "filter"},
+          {"query": "특정 DABS를 보유하고 있는 회원 목록", "role": "filter"}]
       → 세 조건 각각이 독립 sub-question. intersect로 결합.
 
 [sub-question 작성 규칙 — 매우 중요]
@@ -115,54 +135,43 @@ _PLANNER_SYSTEM_PROMPT = """\
 
   잘못된 분해 (공유 제약 누락 — 절대 금지):
       원 질문: "역삼 한국빌딩에 거래 이력이 없지만 현재 그 DABS를 보유 중인 멤버"
-      X ["역삼 한국빌딩을 현재 보유 중인 회원 목록",
-          "거래 이력이 있는 회원 목록"]
+      X [{"query": "역삼 한국빌딩을 현재 보유 중인 회원 목록", "role": "filter"},
+          {"query": "거래 이력이 있는 회원 목록", "role": "filter"}]
       → 두 번째 sub-question에서 "역삼 한국빌딩"이 사라져
          전체 거래자를 조회하게 된다. combine=difference로 결합하면
          정답 집합이 크게 오염된다.
 
   올바른 분해:
       원 질문: "역삼 한국빌딩에 거래 이력이 없지만 현재 그 DABS를 보유 중인 멤버"
-      O ["역삼 한국빌딩을 현재 보유하고 있는 회원 목록",
-          "역삼 한국빌딩에 거래 이력이 있는 회원 목록"]
+      O [{"query": "역삼 한국빌딩을 현재 보유하고 있는 회원 목록", "role": "filter"},
+          {"query": "역삼 한국빌딩에 거래 이력이 있는 회원 목록", "role": "filter"}]
       → 두 sub-question 모두 "역삼 한국빌딩"을 본문에 반복.
          combine=difference 로 결합하면 올바른 정답 집합이 된다.
 
-[enrichment_queries — 보강 조회]
-원 질문이 필터 조건 외에 **추가로 조회해야 할 데이터**(예: "의결권수를
-알려줘", "각 회원의 연락처도 포함해줘")를 요구하면, 해당 조회를
-enrichment_queries에 별도 sub-question으로 분리한다.
-
-- enrichment_queries는 **필터가 아니라 데이터 조회**다.
-  set 연산(intersect/union/difference)에 참여하지 않는다.
-- 필터 subqueries의 결합 결과(최종 키 집합)에 대해 추가 정보를 붙이는
-  용도이므로, enrichment sub-question도 반드시 동일한 키(회원 식별값
-  등)를 반환해야 한다.
-- enrichment sub-question 본문에도 대상 DABS/종목/건물 등 컨텍스트를
-  명시해야 한다 (필터 sub-question과 동일한 규칙).
-- 원 질문이 추가 데이터 조회를 요구하지 않으면 enrichment_queries는
-  빈 배열로 둔다.
-
-예시:
+[종합 예시]
   원 질문: "그레인바운더리빌딩의 매각 투표가 가능한 회원들 중 마케팅
   수신 동의를 했고 아직 투표를 하지 않은 회원을 조회하고 각 회원이
   행사할 수 있는 의결권수를 알려줘"
 
-  subqueries (필터용):
-  - "그레인바운더리빌딩의 매각 투표가 가능한 회원 목록 (회원 식별값)"
-  - "마케팅 수신 동의를 한 회원 목록 (회원 식별값)"
-  - "그레인바운더리빌딩 매각 투표에 아직 참여하지 않은 회원 목록 (회원 식별값)"
+  subqueries:
+  - {"query": "그레인바운더리빌딩의 매각 투표가 가능한 회원 목록 (회원 식별값)", "role": "filter"}
+  - {"query": "마케팅 수신 동의를 한 회원 목록 (회원 식별값)", "role": "filter"}
+  - {"query": "그레인바운더리빌딩 매각 투표에 아직 참여하지 않은 회원 목록 (회원 식별값)", "role": "filter"}
+  - {"query": "그레인바운더리빌딩 매각 투표에서 각 회원이 행사할 수 있는 의결권수 (회원 식별값, 의결권수)", "role": "data"}
 
-  enrichment_queries (보강용):
-  - "그레인바운더리빌딩 매각 투표에서 각 회원이 행사할 수 있는 의결권수 (회원 식별값, 의결권수)"
+  → filter 3개는 intersect로 결합, data 1개는 최종 결과에 컬럼 병합.
+  → 모든 서브쿼리가 병렬 1회로 실행.
 
 [출력 형식 — 반드시 JSON 한 객체만]
 {
   "requires_decomposition": true | false,
   "reasoning": "왜 이렇게 판단했는지 한 줄 (한국어)",
   "combine": "intersect" | "union" | "difference" | null,
-  "subqueries": ["sub-question 1", "sub-question 2", ...],
-  "enrichment_queries": ["enrichment sub-question 1", ...]
+  "subqueries": [
+    {"query": "sub-question 1", "role": "filter"},
+    {"query": "sub-question 2", "role": "filter"},
+    {"query": "data sub-question", "role": "data"}
+  ]
 }
 
 분해가 불필요하면 requires_decomposition=false로 두고 나머지는 null/빈배열로 둔다.
@@ -275,15 +284,20 @@ async def plan_query(
 
     # 분해 결정 시 필수 필드 검증 (LLM이 일관성 잃은 경우)
     if plan.requires_decomposition:
+        filter_count = sum(
+            1 for s in plan.subqueries if s.role == "filter"
+        )
         if (
             not plan.subqueries
-            or len(plan.subqueries) < 2
+            or filter_count < 2
             or plan.combine is None
         ):
             logger.warning(
                 "[query_planner] 분해 결정했으나 필드 부족"
-                " (subqueries=%d, combine=%s) → 폴백",
+                " (subqueries=%d, filter=%d, combine=%s)"
+                " → 폴백",
                 len(plan.subqueries),
+                filter_count,
                 plan.combine,
             )
             return QueryPlan(
@@ -291,29 +305,29 @@ async def plan_query(
                 reasoning="필수 필드 누락",
             )
 
+    filter_subs = [
+        s for s in plan.subqueries if s.role == "filter"
+    ]
+    data_subs = [
+        s for s in plan.subqueries if s.role == "data"
+    ]
     logger.info(
         "[query_planner] decomposition=%s reason=%s"
-        " combine=%s sub_count=%d enrichment_count=%d",
+        " combine=%s filter=%d data=%d",
         plan.requires_decomposition,
         plan.reasoning,
         plan.combine,
-        len(plan.subqueries),
-        len(plan.enrichment_queries),
+        len(filter_subs),
+        len(data_subs),
     )
     if plan.requires_decomposition:
         for i, sub in enumerate(plan.subqueries, 1):
             logger.info(
-                "[query_planner]   └ sub[%d/%d]: %s",
+                "[query_planner]   └ [%d/%d] (%s): %s",
                 i,
                 len(plan.subqueries),
-                sub,
-            )
-        for i, eq in enumerate(plan.enrichment_queries, 1):
-            logger.info(
-                "[query_planner]   └ enrichment[%d/%d]: %s",
-                i,
-                len(plan.enrichment_queries),
-                eq,
+                sub.role,
+                sub.query,
             )
 
     return plan

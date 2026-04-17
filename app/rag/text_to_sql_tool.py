@@ -4,8 +4,9 @@
 컴파일된 StateGraph가 담당한다. 이 모듈은 그 위에 두 가지를 얹는다:
 
 1. `query_planner.plan_query()`로 분해 필요 여부 판단
-2. 분해 경로에서 각 sub-query를 독립적으로 subgraph에 태워 병렬
-   실행하고, SQL 생성 시 LLM이 결정한 key_column 기준 set 연산으로 결합
+2. 분해 경로에서 모든 sub-query(filter + data)를 1라운드 병렬 실행하고,
+   filter 서브쿼리의 key_column 기준 set 연산으로 최종 키를 결정한 뒤
+   모든 서브쿼리의 rows를 key 기준으로 메모리에서 merge
 
 분해가 필요 없으면 subgraph 1회 호출로 기존 동작과 동일하게 작동.
 """
@@ -93,23 +94,34 @@ async def _execute_decomposed(
     plan: QueryPlan,
     literals: list[str],
 ) -> str:
-    """plan에 따라 sub-query들을 subgraph에 병렬 태우고 결합한다."""
+    """plan에 따라 모든 sub-query를 1라운드 병렬 실행 후 결합한다.
+
+    filter role 서브쿼리 → key_set 추출 → set 연산 → final_keys
+    모든 서브쿼리(filter + data) → key 기준 rows merge
+    """
     assert plan.requires_decomposition
     assert plan.combine is not None
 
+    filter_subs = [
+        s for s in plan.subqueries if s.role == "filter"
+    ]
+    data_subs = [
+        s for s in plan.subqueries if s.role == "data"
+    ]
     logger.info(
         "[_execute_decomposed] 분해 실행 시작:"
-        " %d개 sub-query, combine=%s",
-        len(plan.subqueries),
+        " filter=%d, data=%d, combine=%s",
+        len(filter_subs),
+        len(data_subs),
         plan.combine,
     )
 
     # Soft validation: 공유 제약(= literals)이 일부 sub-question에서
     # 누락되면 planner가 공통 컨텍스트를 전파하지 못한 것이다.
-    # 실행은 계속 — 경고만 남겨 튜닝 단서로 활용한다.
     for lit in literals:
         missing = [
-            sub for sub in plan.subqueries if lit not in sub
+            sub for sub in plan.subqueries
+            if lit not in sub.query
         ]
         if missing:
             logger.warning(
@@ -119,14 +131,15 @@ async def _execute_decomposed(
                 " sub-question: %s",
                 lit,
                 len(missing),
-                missing,
+                [s.query for s in missing],
             )
 
+    # ── 1라운드: 모든 서브쿼리 병렬 실행 ──────────────────────
     total = len(plan.subqueries)
     sub_results = await asyncio.gather(
         *[
             _run_subgraph_for_rows(
-                graph, sub, literals,
+                graph, sub.query, literals,
                 query_label=f"Q{i}/{total}",
             )
             for i, sub in enumerate(plan.subqueries, 1)
@@ -134,73 +147,88 @@ async def _execute_decomposed(
         return_exceptions=True,
     )
 
-    key_sets: list[set[Any]] = []
+    # ── 결과 수집 ────────────────────────────────────────────
+    filter_key_sets: list[set[Any]] = []
     sub_row_lists: list[list[dict[str, Any]]] = []
-    resolved_keys: list[str] = []  # sub별 key 컬럼명
+    resolved_keys: list[str] = []
+    primary_key: str | None = None
+
     for i, result in enumerate(sub_results, 1):
         sub = plan.subqueries[i - 1]
         if isinstance(result, BaseException):
             logger.warning(
-                "[_execute_decomposed] sub[%d] 예외: %s | sub=%r",
-                i,
-                result,
-                sub,
+                "[_execute_decomposed] [%d] 예외: %s"
+                " | role=%s sub=%r",
+                i, result, sub.role, sub.query,
             )
-            return CANNOT_ANSWER
+            if sub.role == "filter":
+                return CANNOT_ANSWER
+            sub_row_lists.append([])
+            resolved_keys.append("")
+            continue
 
         rows, key_col, err = result
         if rows is None:
             logger.warning(
-                "[_execute_decomposed] sub[%d] 실패: %s | sub=%r",
-                i,
-                err,
-                sub,
+                "[_execute_decomposed] [%d] 실패: %s"
+                " | role=%s sub=%r",
+                i, err, sub.role, sub.query,
             )
-            return CANNOT_ANSWER
+            if sub.role == "filter":
+                return CANNOT_ANSWER
+            sub_row_lists.append([])
+            resolved_keys.append("")
+            continue
+
         if not rows:
             logger.info(
-                "[_execute_decomposed] sub[%d] 결과 0건 | sub=%r",
-                i,
-                sub,
+                "[_execute_decomposed] [%d] 결과 0건"
+                " | role=%s sub=%r",
+                i, sub.role, sub.query,
             )
-            key_sets.append(set())
+            if sub.role == "filter":
+                filter_key_sets.append(set())
             sub_row_lists.append([])
             resolved_keys.append(key_col or "")
             continue
 
-        # key_column이 없거나 결과에 해당 컬럼이 없으면 실패
         columns = list(rows[0].keys())
         if not key_col or key_col not in columns:
             logger.warning(
-                "[_execute_decomposed] sub[%d] key 컬럼 %r이(가)"
-                " 결과에 없음 (있는 컬럼: %s) | sub=%r",
-                i,
-                key_col,
-                columns,
-                sub,
+                "[_execute_decomposed] [%d] key 컬럼 %r이(가)"
+                " 결과에 없음 (있는 컬럼: %s)"
+                " | role=%s sub=%r",
+                i, key_col, columns, sub.role, sub.query,
             )
-            return CANNOT_ANSWER
+            if sub.role == "filter":
+                return CANNOT_ANSWER
+            sub_row_lists.append([])
+            resolved_keys.append("")
+            continue
 
         resolved_keys.append(key_col)
-        keys = {
-            row[key_col]
-            for row in rows
-            if row.get(key_col) is not None
-        }
-        key_sets.append(keys)
         sub_row_lists.append(rows)
+
+        if sub.role == "filter":
+            keys = {
+                row[key_col]
+                for row in rows
+                if row.get(key_col) is not None
+            }
+            filter_key_sets.append(keys)
+            if primary_key is None:
+                primary_key = key_col
+
         logger.info(
-            "[_execute_decomposed] sub[%d/%d] 완료:"
-            " %d행, %d개 키 (key_column=%s) | sub=%r",
-            i,
-            len(plan.subqueries),
-            len(rows),
-            len(keys),
-            key_col,
-            sub,
+            "[_execute_decomposed] [%d/%d] 완료:"
+            " %d행 (key_column=%s)"
+            " | role=%s sub=%r",
+            i, total, len(rows), key_col,
+            sub.role, sub.query,
         )
 
-    final_keys = combine_keys(key_sets, plan.combine)
+    # ── set 연산 (filter만) ──────────────────────────────────
+    final_keys = combine_keys(filter_key_sets, plan.combine)
     logger.info(
         "[_execute_decomposed] 결합(%s) 결과: %d개 키",
         plan.combine,
@@ -209,93 +237,41 @@ async def _execute_decomposed(
 
     if not final_keys:
         return NO_DATA
+    if not primary_key:
+        return CANNOT_ANSWER
 
-    primary_key = resolved_keys[0]
-    primary_rows = sub_row_lists[0]
-    filtered = [
-        r for r in primary_rows if r.get(primary_key) in final_keys
-    ]
-    # 첫 sub에 없지만 결합에서 살아남은 키는 키만 담긴 더미 row로 채움
-    present_keys = {r.get(primary_key) for r in filtered}
-    for k in final_keys:
-        if k not in present_keys:
-            filtered.append({primary_key: k})
-
-    # ── enrichment 쿼리 실행 및 결과 병합 ──────────────────────
-    if plan.enrichment_queries:
-        logger.info(
-            "[_execute_decomposed] enrichment 쿼리 %d개 실행",
-            len(plan.enrichment_queries),
-        )
-        enrich_results = await asyncio.gather(
-            *[
-                _run_subgraph_for_rows(
-                    graph, eq, literals,
-                    query_label=f"E{i}/{len(plan.enrichment_queries)}",
-                )
-                for i, eq in enumerate(
-                    plan.enrichment_queries, 1
-                )
-            ],
-            return_exceptions=True,
-        )
-        for i, result in enumerate(enrich_results, 1):
-            eq = plan.enrichment_queries[i - 1]
-            if isinstance(result, BaseException):
-                logger.warning(
-                    "[_execute_decomposed] enrichment[%d]"
-                    " 예외: %s | eq=%r",
-                    i, result, eq,
-                )
+    # ── 모든 서브쿼리 rows를 key 기준으로 merge ──────────────
+    merged: dict[Any, dict[str, Any]] = {}
+    for i, sub in enumerate(plan.subqueries):
+        rows = sub_row_lists[i]
+        key_col = resolved_keys[i]
+        if not rows or not key_col:
+            continue
+        for row in rows:
+            k = row.get(key_col)
+            if k is None or k not in final_keys:
                 continue
-            rows, key_col, err = result
-            if rows is None or err:
-                logger.warning(
-                    "[_execute_decomposed] enrichment[%d]"
-                    " 실패: %s | eq=%r",
-                    i, err, eq,
-                )
-                continue
-            if not rows or not key_col:
-                logger.info(
-                    "[_execute_decomposed] enrichment[%d]"
-                    " 결과 0건 또는 key 없음 | eq=%r",
-                    i, eq,
-                )
-                continue
+            if k not in merged:
+                merged[k] = {primary_key: k}
+            for col, val in row.items():
+                if col == key_col and col != primary_key:
+                    continue
+                if col not in merged[k]:
+                    merged[k][col] = val
 
-            # enrichment 결과를 key 기준 lookup dict로 변환
-            enrich_cols = [
-                c for c in rows[0].keys() if c != key_col
-            ]
-            enrich_map: dict[Any, dict[str, Any]] = {}
-            for row in rows:
-                k = row.get(key_col)
-                if k is not None:
-                    enrich_map[k] = {
-                        c: row[c] for c in enrich_cols
-                    }
-            # filtered rows에 enrichment 컬럼 병합
-            for row in filtered:
-                extra = enrich_map.get(row.get(primary_key))
-                if extra:
-                    row.update(extra)
-            logger.info(
-                "[_execute_decomposed] enrichment[%d/%d]"
-                " 병합 완료: %d행, 추가 컬럼=%s | eq=%r",
-                i,
-                len(plan.enrichment_queries),
-                len(enrich_map),
-                enrich_cols,
-                eq,
-            )
+    filtered = list(merged.values())
 
-    sub_summary = ", ".join(
-        f"sub{i + 1}={len(s)}" for i, s in enumerate(key_sets)
+    filter_summary = ", ".join(
+        f"F{i + 1}={len(s)}"
+        for i, s in enumerate(filter_key_sets)
+    )
+    data_summary = (
+        f", data={len(data_subs)}" if data_subs else ""
     )
     result_str = format_rows_for_tool_result(filtered)
     decomposed_str = (
-        f"[분해 실행: {plan.combine}, {sub_summary}"
+        f"[분해 실행: {plan.combine},"
+        f" {filter_summary}{data_summary}"
         f" → 최종 {len(final_keys)}건] {result_str}"
     )
     logger.info(
@@ -314,9 +290,9 @@ def create_text_to_sql_tool(
     """Text-to-SQL LangGraph tool을 생성한다.
 
     단일 조건 쿼리는 `text_to_sql_graph`의 컴파일된 StateGraph를
-    1회 호출한다. 멀티 조건 쿼리는 `query_planner`로 분해 후 각
-    sub-query별로 동일한 graph를 병렬 호출하고 결과를 set 연산으로
-    결합한다 (Pattern B).
+    1회 호출한다. 멀티 조건 쿼리는 `query_planner`로 분해 후 모든
+    sub-query를 1라운드 병렬 실행하고, filter role의 결과로 set 연산,
+    전체 결과를 key 기준 merge한다.
     """
     deps = TextToSqlDeps(
         schema_searcher=schema_searcher,
@@ -380,7 +356,7 @@ def create_text_to_sql_tool(
         # 1단계: 쿼리 분해 가능성 판단 (planner LLM 호출)
         plan = await plan_query(query, literals, llm)
 
-        # 2단계 (분해 경로): 각 sub-query를 subgraph에 병렬 태우고 결합
+        # 2단계 (분해 경로): 모든 sub-query를 1라운드 병렬 실행 후 결합
         if plan.requires_decomposition:
             logger.info(
                 "[text_to_sql_tool] 분해 실행으로 분기 (reason=%s)",

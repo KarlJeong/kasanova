@@ -49,10 +49,11 @@ class TestPlanQuery:
                 content=(
                     '{"requires_decomposition": true,'
                     ' "reasoning": "세 조건 AND",'
-                    ' '
                     ' "combine": "intersect",'
                     ' "subqueries": ['
-                    '"sub1", "sub2", "sub3"]}'
+                    '{"query": "sub1", "role": "filter"},'
+                    '{"query": "sub2", "role": "filter"},'
+                    '{"query": "sub3", "role": "filter"}]}'
                 )
             )
         )
@@ -113,9 +114,10 @@ class TestPlanQuery:
                     "분석 결과:\n"
                     '{"requires_decomposition": true,'
                     ' "reasoning": "교집합",'
-                    ' '
                     ' "combine": "intersect",'
-                    ' "subqueries": ["a", "b"]}\n'
+                    ' "subqueries": ['
+                    '{"query": "a", "role": "filter"},'
+                    '{"query": "b", "role": "filter"}]}\n'
                     "이상입니다."
                 )
             )
@@ -145,7 +147,6 @@ class TestPlanQuery:
                 content=(
                     '{"requires_decomposition": true,'
                     ' "reasoning": "x",'
-                    ' '
                     ' "combine": "intersect",'
                     ' "subqueries": []}'
                 )
@@ -162,9 +163,29 @@ class TestPlanQuery:
                 content=(
                     '{"requires_decomposition": true,'
                     ' "reasoning": "x",'
-                    ' '
                     ' "combine": null,'
-                    ' "subqueries": ["a", "b"]}'
+                    ' "subqueries": ['
+                    '{"query": "a", "role": "filter"},'
+                    '{"query": "b", "role": "filter"}]}'
+                )
+            )
+        )
+        plan = await plan_query("질문", [], mock_llm)
+        assert plan.requires_decomposition is False
+
+    async def test_decomposition_single_filter_falls_back(
+        self, mock_llm
+    ) -> None:
+        """filter role이 1개뿐이면 set 연산 불가 → 폴백."""
+        mock_llm.ainvoke = AsyncMock(
+            return_value=AIMessage(
+                content=(
+                    '{"requires_decomposition": true,'
+                    ' "reasoning": "x",'
+                    ' "combine": "intersect",'
+                    ' "subqueries": ['
+                    '{"query": "a", "role": "filter"},'
+                    '{"query": "b", "role": "data"}]}'
                 )
             )
         )
