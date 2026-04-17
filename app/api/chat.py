@@ -127,8 +127,15 @@ async def chat_stream(
                         "[Chat] 도구 실행 시작: %s",
                         event["name"],
                     )
+                    # 도구가 호출되면 이전 LLM 출력은
+                    # 중간 텍스트이므로 버퍼를 초기화하고
+                    # 클라이언트에 clear 이벤트를 보낸다.
+                    buffer = ""
                     status = _TOOL_STATUS.get(event["name"])
                     if status:
+                        yield (
+                            f"data: {json.dumps({'type': 'clear'}, ensure_ascii=False)}\n\n"
+                        )
                         yield (
                             f"data: {json.dumps({'type': 'status', 'text': status}, ensure_ascii=False)}\n\n"
                         )
@@ -488,6 +495,8 @@ async function send() {
 
         if (data.type === 'session') {
           sessionId = data.session_id;
+        } else if (data.type === 'clear') {
+          botEl.textContent = '';
         } else if (data.type === 'status') {
           statusEl.textContent = data.text;
         } else if (data.type === 'token') {
