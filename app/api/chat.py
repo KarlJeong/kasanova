@@ -93,6 +93,11 @@ async def chat_stream(
     workflow = request.app.state.workflow
     session_id = body.session_id or str(uuid.uuid4())
 
+    logger.info(
+        "[Chat] 요청 수신 (session=%s): %s",
+        session_id, body.message[:100],
+    )
+
     async with AsyncSessionLocal() as db:
         slack_thread = await _upsert_chat_thread(
             db, session_id
@@ -109,71 +114,99 @@ async def chat_stream(
         buffer = ""
         tool_msgs: list[ToolMessage] = []
 
-        async for event in workflow.astream_events(
-            {"messages": [HumanMessage(content=body.message)]},
-            config=config,
-            version="v2",
-        ):
-            kind = event["event"]
+        try:
+            async for event in workflow.astream_events(
+                {"messages": [HumanMessage(content=body.message)]},
+                config=config,
+                version="v2",
+            ):
+                kind = event["event"]
 
-            if kind == "on_tool_start":
-                status = _TOOL_STATUS.get(event["name"])
-                if status:
-                    yield (
-                        f"data: {json.dumps({'type': 'status', 'text': status}, ensure_ascii=False)}\n\n"
+                if kind == "on_tool_start":
+                    logger.info(
+                        "[Chat] 도구 실행 시작: %s",
+                        event["name"],
                     )
-
-            elif kind == "on_tool_end":
-                if event["name"] in _TOOL_STATUS:
-                    output = event["data"].get("output", "")
-                    tool_msgs.append(
-                        ToolMessage(
-                            content=str(output),
-                            tool_call_id="",
-                            name=event["name"],
+                    status = _TOOL_STATUS.get(event["name"])
+                    if status:
+                        yield (
+                            f"data: {json.dumps({'type': 'status', 'text': status}, ensure_ascii=False)}\n\n"
                         )
-                    )
 
-            elif kind == "on_chat_model_stream":
-                node = event.get(
-                    "metadata", {}
-                ).get("langgraph_node")
-                if node != "call_llm":
-                    continue
-                chunk = event["data"]["chunk"]
-                raw = (
-                    chunk.content
-                    if hasattr(chunk, "content")
-                    else ""
+                elif kind == "on_tool_end":
+                    logger.info(
+                        "[Chat] 도구 실행 완료: %s",
+                        event["name"],
+                    )
+                    if event["name"] in _TOOL_STATUS:
+                        output = event["data"].get("output", "")
+                        tool_msgs.append(
+                            ToolMessage(
+                                content=str(output),
+                                tool_call_id="",
+                                name=event["name"],
+                            )
+                        )
+
+                elif kind == "on_chat_model_stream":
+                    node = event.get(
+                        "metadata", {}
+                    ).get("langgraph_node")
+                    if node != "call_llm":
+                        continue
+                    chunk = event["data"]["chunk"]
+                    raw = (
+                        chunk.content
+                        if hasattr(chunk, "content")
+                        else ""
+                    )
+                    if isinstance(raw, list):
+                        token = "".join(
+                            block.get("text", "")
+                            if isinstance(block, dict)
+                            else str(block)
+                            for block in raw
+                        )
+                    else:
+                        token = raw or ""
+                    if token:
+                        buffer += token
+                        yield (
+                            f"data: {json.dumps({'type': 'token', 'text': token}, ensure_ascii=False)}\n\n"
+                        )
+
+            answer = buffer or "응답을 생성하지 못했습니다."
+            sanitized = _strip_sql_from_answer(answer)
+            if sanitized != answer:
+                logger.info(
+                    "[Chat] SQL/code-fence 제거됨"
+                    " (원본 %d자 → %d자)",
+                    len(answer), len(sanitized),
                 )
-                if isinstance(raw, list):
-                    token = "".join(
-                        block.get("text", "")
-                        if isinstance(block, dict)
-                        else str(block)
-                        for block in raw
-                    )
-                else:
-                    token = raw or ""
-                if token:
-                    buffer += token
-                    yield (
-                        f"data: {json.dumps({'type': 'token', 'text': token}, ensure_ascii=False)}\n\n"
-                    )
+            answer = sanitized or answer
 
-        answer = buffer or "응답을 생성하지 못했습니다."
-        sanitized = _strip_sql_from_answer(answer)
-        answer = sanitized or answer
+            ref_messages: list[Any] = [
+                HumanMessage(content=""),
+                *tool_msgs,
+            ]
+            references = _extract_references(ref_messages)
 
-        ref_messages: list[Any] = [
-            HumanMessage(content=""),
-            *tool_msgs,
-        ]
-        references = _extract_references(ref_messages)
+            logger.info(
+                "[Chat] 응답 완료 (session=%s, %d자)",
+                session_id, len(answer),
+            )
 
-        yield (
-            f"data: {json.dumps({'type': 'done', 'answer': answer, 'references': references}, ensure_ascii=False)}\n\n"
-        )
+            yield (
+                f"data: {json.dumps({'type': 'done', 'answer': answer, 'references': references}, ensure_ascii=False)}\n\n"
+            )
+        except Exception:
+            logger.exception(
+                "[Chat] LangGraph 처리 중 오류 발생"
+                " (session=%s)", session_id,
+            )
+            yield (
+                f"data: {json.dumps({'type': 'done', 'answer': '오류가 발생했습니다. 다시 시도해 주세요.', 'references': ''}, ensure_ascii=False)}\n\n"
+            )
 
     return StreamingResponse(
         event_generator(),
