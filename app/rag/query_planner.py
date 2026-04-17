@@ -42,7 +42,14 @@ class QueryPlan(BaseModel):
     )
     subqueries: list[str] = Field(
         default_factory=list,
-        description="원자적 sub-question들. 한국어 자연어.",
+        description="원자적 sub-question들 (필터용). 한국어 자연어.",
+    )
+    enrichment_queries: list[str] = Field(
+        default_factory=list,
+        description=(
+            "필터가 아닌 추가 데이터 조회용 sub-question들. "
+            "최종 필터 결과에 보강 정보를 붙일 때 사용."
+        ),
     )
 
 
@@ -121,12 +128,41 @@ _PLANNER_SYSTEM_PROMPT = """\
       → 두 sub-question 모두 "역삼 한국빌딩"을 본문에 반복.
          combine=difference 로 결합하면 올바른 정답 집합이 된다.
 
+[enrichment_queries — 보강 조회]
+원 질문이 필터 조건 외에 **추가로 조회해야 할 데이터**(예: "의결권수를
+알려줘", "각 회원의 연락처도 포함해줘")를 요구하면, 해당 조회를
+enrichment_queries에 별도 sub-question으로 분리한다.
+
+- enrichment_queries는 **필터가 아니라 데이터 조회**다.
+  set 연산(intersect/union/difference)에 참여하지 않는다.
+- 필터 subqueries의 결합 결과(최종 키 집합)에 대해 추가 정보를 붙이는
+  용도이므로, enrichment sub-question도 반드시 동일한 키(회원 식별값
+  등)를 반환해야 한다.
+- enrichment sub-question 본문에도 대상 DABS/종목/건물 등 컨텍스트를
+  명시해야 한다 (필터 sub-question과 동일한 규칙).
+- 원 질문이 추가 데이터 조회를 요구하지 않으면 enrichment_queries는
+  빈 배열로 둔다.
+
+예시:
+  원 질문: "그레인바운더리빌딩의 매각 투표가 가능한 회원들 중 마케팅
+  수신 동의를 했고 아직 투표를 하지 않은 회원을 조회하고 각 회원이
+  행사할 수 있는 의결권수를 알려줘"
+
+  subqueries (필터용):
+  - "그레인바운더리빌딩의 매각 투표가 가능한 회원 목록 (회원 식별값)"
+  - "마케팅 수신 동의를 한 회원 목록 (회원 식별값)"
+  - "그레인바운더리빌딩 매각 투표에 아직 참여하지 않은 회원 목록 (회원 식별값)"
+
+  enrichment_queries (보강용):
+  - "그레인바운더리빌딩 매각 투표에서 각 회원이 행사할 수 있는 의결권수 (회원 식별값, 의결권수)"
+
 [출력 형식 — 반드시 JSON 한 객체만]
 {
   "requires_decomposition": true | false,
   "reasoning": "왜 이렇게 판단했는지 한 줄 (한국어)",
   "combine": "intersect" | "union" | "difference" | null,
-  "subqueries": ["sub-question 1", "sub-question 2", ...]
+  "subqueries": ["sub-question 1", "sub-question 2", ...],
+  "enrichment_queries": ["enrichment sub-question 1", ...]
 }
 
 분해가 불필요하면 requires_decomposition=false로 두고 나머지는 null/빈배열로 둔다.
@@ -257,11 +293,12 @@ async def plan_query(
 
     logger.info(
         "[query_planner] decomposition=%s reason=%s"
-        " combine=%s sub_count=%d",
+        " combine=%s sub_count=%d enrichment_count=%d",
         plan.requires_decomposition,
         plan.reasoning,
         plan.combine,
         len(plan.subqueries),
+        len(plan.enrichment_queries),
     )
     if plan.requires_decomposition:
         for i, sub in enumerate(plan.subqueries, 1):
@@ -270,6 +307,13 @@ async def plan_query(
                 i,
                 len(plan.subqueries),
                 sub,
+            )
+        for i, eq in enumerate(plan.enrichment_queries, 1):
+            logger.info(
+                "[query_planner]   └ enrichment[%d/%d]: %s",
+                i,
+                len(plan.enrichment_queries),
+                eq,
             )
 
     return plan

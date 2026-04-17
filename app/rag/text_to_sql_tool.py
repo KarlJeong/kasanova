@@ -221,6 +221,75 @@ async def _execute_decomposed(
         if k not in present_keys:
             filtered.append({primary_key: k})
 
+    # ── enrichment 쿼리 실행 및 결과 병합 ──────────────────────
+    if plan.enrichment_queries:
+        logger.info(
+            "[_execute_decomposed] enrichment 쿼리 %d개 실행",
+            len(plan.enrichment_queries),
+        )
+        enrich_results = await asyncio.gather(
+            *[
+                _run_subgraph_for_rows(
+                    graph, eq, literals,
+                    query_label=f"E{i}/{len(plan.enrichment_queries)}",
+                )
+                for i, eq in enumerate(
+                    plan.enrichment_queries, 1
+                )
+            ],
+            return_exceptions=True,
+        )
+        for i, result in enumerate(enrich_results, 1):
+            eq = plan.enrichment_queries[i - 1]
+            if isinstance(result, BaseException):
+                logger.warning(
+                    "[_execute_decomposed] enrichment[%d]"
+                    " 예외: %s | eq=%r",
+                    i, result, eq,
+                )
+                continue
+            rows, key_col, err = result
+            if rows is None or err:
+                logger.warning(
+                    "[_execute_decomposed] enrichment[%d]"
+                    " 실패: %s | eq=%r",
+                    i, err, eq,
+                )
+                continue
+            if not rows or not key_col:
+                logger.info(
+                    "[_execute_decomposed] enrichment[%d]"
+                    " 결과 0건 또는 key 없음 | eq=%r",
+                    i, eq,
+                )
+                continue
+
+            # enrichment 결과를 key 기준 lookup dict로 변환
+            enrich_cols = [
+                c for c in rows[0].keys() if c != key_col
+            ]
+            enrich_map: dict[Any, dict[str, Any]] = {}
+            for row in rows:
+                k = row.get(key_col)
+                if k is not None:
+                    enrich_map[k] = {
+                        c: row[c] for c in enrich_cols
+                    }
+            # filtered rows에 enrichment 컬럼 병합
+            for row in filtered:
+                extra = enrich_map.get(row.get(primary_key))
+                if extra:
+                    row.update(extra)
+            logger.info(
+                "[_execute_decomposed] enrichment[%d/%d]"
+                " 병합 완료: %d행, 추가 컬럼=%s | eq=%r",
+                i,
+                len(plan.enrichment_queries),
+                len(enrich_map),
+                enrich_cols,
+                eq,
+            )
+
     sub_summary = ", ".join(
         f"sub{i + 1}={len(s)}" for i, s in enumerate(key_sets)
     )
