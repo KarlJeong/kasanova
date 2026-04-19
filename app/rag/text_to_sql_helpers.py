@@ -92,7 +92,7 @@ def validate_sql(sql: str) -> bool:
     if not sql:
         return False
     stripped = sql.strip()
-    if not stripped.upper().startswith("SELECT"):
+    if not stripped.upper().startswith(("SELECT", "WITH")):
         return False
     if FORBIDDEN_PATTERN.search(stripped):
         return False
@@ -185,6 +185,14 @@ def parse_sql_response(
     plain SQL이면 (sql, None)으로 폴백한다.
     """
     stripped = text.strip()
+    # LLM이 JSON 앞에 "---" 등 접두사��� 붙이는 경우 제거
+    cleaned = re.sub(r"^-{2,}\s*", "", stripped).strip()
+    if cleaned.startswith("{"):
+        try:
+            data = json.loads(cleaned)
+            return data.get("sql"), data.get("key_column")
+        except json.JSONDecodeError:
+            pass
     if stripped.startswith("{"):
         try:
             data = json.loads(stripped)

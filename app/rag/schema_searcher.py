@@ -1,7 +1,12 @@
+from __future__ import annotations
+
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from app.rag.searcher import HybridSearcher
+
+if TYPE_CHECKING:
+    from app.rag.reranker import Reranker
 
 logger = logging.getLogger(__name__)
 
@@ -20,10 +25,14 @@ class SchemaSearcher:
         hybrid: HybridSearcher,
         pinned_doc_ids: list[str] | None = None,
         excluded_doc_ids: list[str] | None = None,
+        reranker: Reranker | None = None,
+        rerank_top_k: int = 10,
     ) -> None:
         self.hybrid = hybrid
         self.pinned_doc_ids = pinned_doc_ids or []
         self.excluded_doc_ids = set(excluded_doc_ids or [])
+        self.reranker = reranker
+        self.rerank_top_k = rerank_top_k
 
     async def search(
         self, query: str, log_prefix: str = "",
@@ -47,6 +56,58 @@ class SchemaSearcher:
                 continue
             seen.add(h["doc_id"])
             hits.append(h)
+
+        # ── 하이브리드 검색 결과 로그 ──
+        if hits:
+            logger.info(
+                "%s 하이브리드 검색 %d건:",
+                pfx, len(hits),
+            )
+            for i, h in enumerate(hits, 1):
+                logger.info(
+                    "%s   [%d/%d] hybrid=%.4f [%s]",
+                    pfx, i, len(hits),
+                    h["score"], h["doc_id"],
+                )
+
+        # ── Rerank ──
+        if self.reranker and hits:
+            # hybrid 순위를 기록해 둔다
+            hybrid_rank = {
+                h["doc_id"]: rank
+                for rank, h in enumerate(hits, 1)
+            }
+            passages = [h["content"] for h in hits]
+            rerank_scores = await self.reranker.arank(
+                query, passages
+            )
+            for h, rs in zip(hits, rerank_scores):
+                h["rerank_score"] = rs
+            hits.sort(
+                key=lambda h: h["rerank_score"],
+                reverse=True,
+            )
+            logger.info(
+                "%s rerank 결과 %d건:",
+                pfx, len(hits),
+            )
+            for i, h in enumerate(hits, 1):
+                marker = " ✔" if i <= self.rerank_top_k else ""
+                h_rank = hybrid_rank[h["doc_id"]]
+                logger.info(
+                    "%s   [%d→%d/%d] rerank=%.4f"
+                    " hybrid=%.4f [%s]%s",
+                    pfx, h_rank, i, len(hits),
+                    h["rerank_score"],
+                    h["score"],
+                    h["doc_id"],
+                    marker,
+                )
+            hits = hits[: self.rerank_top_k]
+            logger.info(
+                "%s 상위 %d개만 LLM에 전달",
+                pfx, len(hits),
+            )
 
         pinned_hits: list[dict[str, Any]] = []
         for doc_id in self.pinned_doc_ids:
@@ -88,23 +149,11 @@ class SchemaSearcher:
             return []
 
         logger.info(
-            "%s %d hits: %s",
+            "%s 최종 전달 %d건: %s",
             pfx,
             len(hits),
             [h["doc_id"] for h in hits],
         )
-        for i, hit in enumerate(hits, 1):
-            preview = hit["content"][:80].replace("\n", " ")
-            logger.info(
-                "%s [%d/%d] score=%.4f"
-                " [%s] '%s...'",
-                pfx,
-                i,
-                len(hits),
-                hit["score"],
-                hit["doc_id"],
-                preview,
-            )
 
         return [
             {

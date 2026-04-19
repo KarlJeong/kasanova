@@ -1,0 +1,146 @@
+그레인바운더리빌딩의 매각투표에 대한 정보를 조회해줘. 그리고 매각 투표가 가능한 회원과 각 회원이 행사할 수 있는 의결권수도 알려줘.
+
+
+### Sonnet 4.6
+2026-04-17 13:22:12 INFO app.graph.nodes | [LLM] 응답 원본:
+content=[
+{'text': '그레인바운더리빌딩의 코드는 `KR011A200005O8`이네요. 이제 매각투표 정보와 참여 가능한 회원 및 보유 수량을 동시에 조회하겠습니다.', 'type': 'text', 'index': 0},
+{'id': 'toolu_019U5xsT8GMnBP2FxzcLCdzQ', 'input': {}, 'name': 'text_to_sql_tool', 'type': 'tool_use', 'caller': {'type': 'direct'}, 'index': 1, 'partial_json': '{"query": "현재 진행 중인 매각투표 정보를 조회해줘", "literals": ["KR011A200005O8"]}'},
+{'id': 'toolu_01PG1XzGYDcxRFqBjjvQjCHA', 'input': {}, 'name': 'text_to_sql_tool', 'type': 'tool_use', 'caller': {'type': 'direct'}, 'index': 2, 'partial_json': '{"query": "이 종목의 매각투표에 참여 가능한 회원 목록과 각 회원의 보유 수량을 조회해줘", "literals": ["KR011A200005O8"]}'}
+],
+tool_calls=[
+{'name': 'text_to_sql_tool', 'args': {'query': '현재 진행 중인 매각투표 정보를 조회해줘', 'literals': ['KR011A200005O8']}, 'id': 'toolu_019U5xsT8GMnBP2FxzcLCdzQ', 'type': 'tool_call'},
+{'name': 'text_to_sql_tool', 'args': {'query': '이 종목의 매각투표에 참여 가능한 회원 목록과 각 회원의 보유 수량을 조회해줘', 'literals': ['KR011A200005O8']}, 'id': 'toolu_01PG1XzGYDcxRFqBjjvQjCHA', 'type': 'tool_call'}],
+additional_kwargs={},
+response_metadata={'model_name': 'claude-sonnet-4-6', 'stop_reason': 'tool_use', 'stop_sequence': None}
+
+2026-04-17 13:22:12 INFO app.graph.nodes | [LLM] tool_calls 반환 (2건)
+2026-04-17 13:22:12 INFO app.graph.nodes | [LLM]   └ [1/2] text_to_sql_tool({'query': '현재 진행 중인 매각투표 정보를 조회해줘', 'literals': ['KR011A200005O8']})
+2026-04-17 13:22:12 INFO app.graph.nodes | [LLM]   └ [2/2] text_to_sql_tool({'query': '이 종목의 매각투표에 참여 가능한 회원 목록과 각 회원의 보유 수량을 조회해줘', 'literals': ['KR011A200005O8']})
+
+2026-04-17 13:22:14 INFO app.rag.query_planner | [query_planner] LLM 응답: {
+  "requires_decomposition": false,
+  "reasoning": "단일 조건(현재 진행 중인 매각투표 조회)으로 분해가 불필요한 단순 조회 질문이다.",
+  "combine": null,
+  "subqueries": [],
+  "enrichment_queries": []
+}
+2026-04-17 13:22:15 INFO app.rag.query_planner | [query_planner] LLM 응답: {
+  "requires_decomposition": false,
+  "reasoning": "단일 종목(KR011A200005O8)에 대해 매각투표 참여 가능 회원을 조회하고 보유 수량을 함께 가져오는 단일 조건 조회이므로 분해가 불필요하다.",
+  "combine": null,
+  "subqueries": [],
+  "enrichment_queries": []
+}
+
+조회 결과를 정리해 드립니다.
+
+---
+
+## 📋 그레인바운더리빌딩 매각투표 정보
+
+| 항목 | 내용 |
+|------|------|
+| **투표 ID** | 284 |
+| **제목** | 매각 투표 |
+| **상태** | 진행 중 (open) |
+| **투표 시작일** | 2026-04-10 06:25 |
+| **투표 종료일** | 2026-04-22 06:00 |
+| **총 의결권 수** | 420,000 |
+| **가결 기준 수량** | 140,000 (총 의결권의 1/3) |
+| **찬성 수** | 989 |
+| **반대 수** | 0 |
+| **투표 결과** | 미정 (진행 중) |
+
+---
+
+## 👥 투표 참여 가능 회원 및 보유 수량 (총 6명)
+
+| 회원 ID | 회원 유형 | 총 보유 수량 | 가용 수량 | 동결 수량 |
+|---------|----------|------------|---------|---------|
+| 1815 | 법인 | 417,811 | 417,811 | 0 |
+| 1942 | 개인 | 1,000 | 1,000 | 0 |
+| 1825 | 개인 | 990 | 990 | 0 |
+| 1804 | 개인 | 106 | 106 | 0 |
+| 1820 | 개인 | 90 | 90 | 0 |
+| 2328 | 개인 | 3 | 3 | 0 |
+
+> 전체 보유 수량 합계: **420,000** (모두 가용 수량이며, 동결 수량 없음)
+
+현재 찬성 989표가 집계되어 있으며, 가결 기준(140,000)에는 아직 미달한 상태입니다. 투표 종료까지 약 5일 남아있습니다.
+
+
+
+### gemini-2.5-flash
+2026-04-17 13:26:02 INFO app.graph.nodes | [LLM] 응답 원본:
+content='',
+tool_calls=[
+{'name': 'dabs_summary_list', 'args': {}, 'id': '7e44d803-42d9-4dd3-9232-217427acec99', 'type': 'tool_call'}
+],
+additional_kwargs={'function_call': {'name': 'dabs_summary_list', 'arguments': '{}'}},
+response_metadata={'finish_reason': 'STOP', 'model_name': 'gemini-2.5-flash', 'safety_ratings': []}
+
+2026-04-17 13:26:02 INFO app.graph.nodes | [LLM] tool_calls 반환 (1건)
+2026-04-17 13:26:02 INFO app.graph.nodes | [LLM]   └ [1/1] dabs_summary_list({})
+
+2026-04-17 13:26:37 INFO app.rag.query_planner | [query_planner] LLM 응답: ```json
+{
+  "requires_decomposition": true,
+  "reasoning": "매각 투표 참여 가능 회원 필터 조건과 각 회원의 보유 수량 조회 요청이 포함되어 있어, 회원 식별값을 공통 키로 하는 필터용 sub-question과 데이터 보강용 enrichment_query로 분해합니다. '매각 투표 정보'는 특정 종목의 투표 자체에 대한 정보 요청으로, 회원 식별값을 공통 키로 하는 set 연산 또는 각 회원에 대한 추가 정보에 해당하지 않아 이 단계의 계획에서는 제외됩니다.",
+  "combine": null,
+  "subqueries": [
+    "종목 KR011A200005O8의 매각 투표에 참여 가능한 회원 목록 (회원 식별값)"
+  ],
+  "enrichment_queries": [
+    "종목 KR011A200005O8을 각 회원이 보유하고 있는 수량 (회원 식별값, 보유 수량)"
+  ]
+}
+```
+
+현재 진행 중인 그레인바운더리빌딩(KR011A200005O8)의 매각 투표 정보는 다음과 같습니다:
+
+*   **투표 제목**: 매각 투표
+*   **투표 상태**: 진행 중 (open)
+*   **시작일**: 2026년 4월 10일 06:25:11
+*   **종료일**: 2026년 4월 22일 06:00:00
+*   **찬성표**: 989표
+*   **반대표**: 0표
+*   **총 투표권**: 420,000
+
+이 매각 투표에 참여 가능한 회원 및 각 회원의 보유 수량은 다음과 같습니다:
+
+*   **회원 ID 1804**: 106개
+*   **회원 ID 1815**: 417,811개
+*   **회원 ID 1820**: 90개
+*   **회원 ID 1825**: 990개
+*   **회원 ID 1942**: 1,000개
+*   **회원 ID 2328**: 3개
+
+
+
+### gemma4
+
+2026-04-17 13:31:20 INFO app.graph.nodes | [LLM] 응답 원본: content='', tool_calls=[{'name': 'text_to_sql_tool', 'args': {'literals': ['KR011A200005O8'], 'query': '그레인바운더리빌딩(KR011A200005O8)의 현재 진행 중인 매각투표 정보와, 이 투표에 참여 가능한 회원들의 목록 및 각 회원의 보유 수량을 알려줘.'}, 'id': '003628be-367f-4902-bac4-98b3610e11e4', 'type': 'tool_call'}], additional_kwargs={}, response_metadata={'model': 'gemma4:26b', 'created_at': '2026-04-17T04:31:20.91946Z', 'done': True, 'done_reason': 'stop', 'total_duration': 12077915416, 'load_duration': 157613958, 'prompt_eval_count': 2946, 'prompt_eval_duration': 4134762292, 'eval_count': 423, 'eval_duration': 7673353171, 'logprobs': None, 'model_name': 'gemma4:26b'}
+2026-04-17 13:31:20 INFO app.graph.nodes | [LLM] tool_calls 반환 (1건)
+2026-04-17 13:31:20 INFO app.graph.nodes | [LLM]   └ [1/1] text_to_sql_tool({'literals': ['KR011A200005O8'], 'query': '그레인바운더리빌딩(KR011A200005O8)의 현재 진행 중인 매각투표 정보와, 이 투표에 참여 가능한 회원들의 목록 및 각 회원의 보유 수량을 알려줘.'})
+2026-04-17 13:34:19 INFO app.rag.query_planner | [query_planner] LLM 응답: ```json
+{
+  "requires_decomposition": false,
+  "reasoning": "질문이 특정 엔티티(회원)에 대한 여러 독립적인 필터 조건(AND/OR/BUT NOT)을 포함하지 않고, 특정 정보와 목록, 그리고 추가 데이터를 동시에 요청하는 단일 구조의 질문이므로 분해가 필요하지 않습니다.",
+  "combine": null,
+  "subqueries": [],
+  "enrichment_queries": []
+}
+```
+
+현재 '매각 투표' 상태로 진행 중인 투표 건이 여러 개 확인되었습니다. 그중 보유 수량이 가장 큰 주요 투표 건을 기준으로 참여 가능한 회원들의 보유 수량을 조회한 결과는 다음과 같습니다.
+
+*   **주요 매각 투표 정보 (보유 수량 기준 상위):**
+    *   투표 UUID: `83a93f393caa409fa6b6b82271926741` (총 보유 수량: 417,811)
+    *   투표 UUID: `4a4e2d3fb4094f66b817180d16727828` (총 보유 수량: 1,000)
+    *   투표 UUID: `2515a078dfa343a2b84b502c5420da0e` (총 보유 수량: 990)
+    *   투표 UUID: `ed8e6d8078c647ca932cc6221097f101` (총 보유 수량: 106)
+    *   투표 UUID: `7fbd274eabea48e4aa8ce41cdbcee2` (총 보유 수량: 90)
+    *   투표 UUID: `2b1a4ab81ada42f6bfb0a15f974d84fe` (총 보유 수량: 3)
+
+현재 시스템상 동일한 명칭의 투표가 여러 개로 나뉘어 존재하므로, 특정 투표 건(UUID 등)에 대해 더 자세한 참여 회원 목록을 알고 싶으시다면 해당 투표의 식별 정보를 알려주시기 바랍니다. 정확한 특정 투표를 지정해 주시면 해당 투표에 참여 가능한 회원 명단과 각 회원의 보유 수량을 즉시 다시 조회해 드리겠습니다.

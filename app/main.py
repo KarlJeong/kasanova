@@ -25,6 +25,7 @@ from app.db.mysql_client import MySQLClient
 from app.graph.workflow import build_workflow
 from app.rag.embedder import Embedder
 from app.rag.indexer import DocumentIndexer
+from app.rag.reranker import Reranker
 from app.rag.schema_searcher import SchemaSearcher
 from app.rag.searcher import HybridSearcher
 from app.services.dabs_service import DabsService
@@ -52,6 +53,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         # RAG: Embedder + OpenSearch
         embedder = Embedder()
         logger.info("KURE-v1 임베딩 모델 로드 완료")
+
+        reranker = Reranker()
+        logger.info("bge-reranker-v2-m3 리랭커 모델 로드 완료")
 
         os_client = AsyncOpenSearch(
             hosts=[settings.opensearch_url],
@@ -93,7 +97,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             os_client=os_client,
             embedder=embedder,
             index_name=schema_index_name,
-            search_pipeline="weighted-mean-pipeline",
+            search_pipeline="schema-search-weighted-mean-pipeline",
         )
         schema_searcher = SchemaSearcher(
             schema_hybrid,
@@ -101,7 +105,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                 "kasa_ledger_dabs",
                 "kasa_member"
             ],
-            excluded_doc_ids=[],
+            excluded_doc_ids=[
+              "kasa_dabs_note"
+            ],
+            reranker=reranker,
+            rerank_top_k=10,
         )
         logger.info("하이브리드 검색기 준비 완료")
 
