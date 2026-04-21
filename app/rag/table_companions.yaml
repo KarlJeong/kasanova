@@ -8,7 +8,10 @@
 # - 이미 후보에 있는 테이블은 중복 주입하지 않는다.
 # - 목록이 비어 있으면 주입은 발생하지 않는다.
 
-companions: {}
+companions:
+  kasa_offering_subscription:
+    - kasa_offering
+
   # 예시:
   # kasa_offering_subscription:
   #   - kasa_offering

@@ -188,11 +188,8 @@ class SchemaSearcher:
                 table_name
             )
             if not chunks:
-                logger.warning(
-                    "%s 이름 조회 실패: %s",
-                    pfx, table_name,
-                )
                 continue
+
             merged_content = "\n".join(
                 c["content"] for c in chunks
             )
@@ -201,11 +198,5 @@ class SchemaSearcher:
                     "table_name": table_name,
                     "schema": merged_content,
                 }
-            )
-            logger.info(
-                "%s 이름 조회 성공:"
-                " %s (청크 %d개)",
-                pfx, table_name,
-                len(chunks),
             )
         return results
