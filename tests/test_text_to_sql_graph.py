@@ -10,6 +10,7 @@ from langchain_core.messages import AIMessage
 
 from app.rag.text_to_sql_graph import (
     TextToSqlDeps,
+    _make_augment_schemas_node,
     _make_execute_sql_node,
     _make_format_result_node,
     _make_generate_sql_node,
@@ -381,15 +382,134 @@ class TestFormatResultNode:
 
 
 # ────────────────────────────────────────────────────────────────────
+# augment_schemas_node
+# ────────────────────────────────────────────────────────────────────
+
+
+class TestAugmentSchemasNode:
+    async def test_no_mapping_is_noop(self, deps) -> None:
+        node = _make_augment_schemas_node(deps)
+        result = await node(
+            {
+                "schemas": [
+                    {"table_name": "kasa_offering_subscription",
+                     "schema": "..."},
+                ],
+            }
+        )
+        assert result == {}
+
+    async def test_injects_companion(
+        self,
+        mock_schema_searcher,
+        mock_kb_searcher,
+        mock_mysql_client,
+        mock_llm,
+    ) -> None:
+        mock_schema_searcher.fetch_schemas_by_names = AsyncMock(
+            return_value=[
+                {"table_name": "kasa_offering", "schema": "..."}
+            ]
+        )
+        deps = TextToSqlDeps(
+            schema_searcher=mock_schema_searcher,
+            kb_searcher=mock_kb_searcher,
+            mysql_client=mock_mysql_client,
+            llm=mock_llm,
+            companion_tables={
+                "kasa_offering_subscription": ["kasa_offering"],
+            },
+        )
+        node = _make_augment_schemas_node(deps)
+        result = await node(
+            {
+                "schemas": [
+                    {"table_name": "kasa_offering_subscription",
+                     "schema": "..."},
+                ],
+            }
+        )
+        names = [s["table_name"] for s in result["schemas"]]
+        assert names == [
+            "kasa_offering_subscription",
+            "kasa_offering",
+        ]
+        mock_schema_searcher.fetch_schemas_by_names.assert_awaited_once()
+        call_args = (
+            mock_schema_searcher.fetch_schemas_by_names.call_args
+        )
+        assert call_args.args[0] == ["kasa_offering"]
+
+    async def test_skips_already_present_companion(
+        self,
+        mock_schema_searcher,
+        mock_kb_searcher,
+        mock_mysql_client,
+        mock_llm,
+    ) -> None:
+        mock_schema_searcher.fetch_schemas_by_names = AsyncMock(
+            return_value=[]
+        )
+        deps = TextToSqlDeps(
+            schema_searcher=mock_schema_searcher,
+            kb_searcher=mock_kb_searcher,
+            mysql_client=mock_mysql_client,
+            llm=mock_llm,
+            companion_tables={
+                "kasa_offering_subscription": ["kasa_offering"],
+            },
+        )
+        node = _make_augment_schemas_node(deps)
+        result = await node(
+            {
+                "schemas": [
+                    {"table_name": "kasa_offering_subscription",
+                     "schema": "..."},
+                    {"table_name": "kasa_offering",
+                     "schema": "..."},
+                ],
+            }
+        )
+        assert result == {}
+        mock_schema_searcher.fetch_schemas_by_names.assert_not_called()
+
+    async def test_no_trigger_match_is_noop(
+        self,
+        mock_schema_searcher,
+        mock_kb_searcher,
+        mock_mysql_client,
+        mock_llm,
+    ) -> None:
+        deps = TextToSqlDeps(
+            schema_searcher=mock_schema_searcher,
+            kb_searcher=mock_kb_searcher,
+            mysql_client=mock_mysql_client,
+            llm=mock_llm,
+            companion_tables={
+                "kasa_offering_subscription": ["kasa_offering"],
+            },
+        )
+        node = _make_augment_schemas_node(deps)
+        result = await node(
+            {
+                "schemas": [
+                    {"table_name": "kasa_member", "schema": "..."},
+                ],
+            }
+        )
+        assert result == {}
+
+
+# ────────────────────────────────────────────────────────────────────
 # Routing
 # ────────────────────────────────────────────────────────────────────
 
 
 class TestRouting:
-    def test_route_after_retrieve_to_generate(self) -> None:
+    def test_route_after_retrieve_to_augment(self) -> None:
         assert (
             _route_after_retrieve({"schemas": [{"x": 1}]})
-            == "generate_sql"
+            == "augment_schemas"
         )
 
     def test_route_after_retrieve_to_format_on_error(

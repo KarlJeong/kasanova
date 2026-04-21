@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from pathlib import Path
 from typing import Any
 
 from langchain_core.language_models import BaseChatModel
@@ -24,10 +25,15 @@ from app.db.mysql_client import MySQLClient
 from app.rag.query_planner import QueryPlan, combine_keys, plan_query
 from app.rag.schema_searcher import SchemaSearcher
 from app.rag.searcher import HybridSearcher
+from app.rag.table_companions import load_companion_tables
 from app.rag.text_to_sql_graph import (
     TextToSqlDeps,
     TextToSqlState,
     build_text_to_sql_graph,
+)
+
+_COMPANIONS_PATH = (
+    Path(__file__).resolve().parent / "table_companions.yaml"
 )
 from app.rag.text_to_sql_helpers import (
     CANNOT_ANSWER,
@@ -294,11 +300,13 @@ def create_text_to_sql_tool(
     sub-query를 1라운드 병렬 실행하고, filter role의 결과로 set 연산,
     전체 결과를 key 기준 merge한다.
     """
+    companion_tables = load_companion_tables(_COMPANIONS_PATH)
     deps = TextToSqlDeps(
         schema_searcher=schema_searcher,
         kb_searcher=kb_searcher,
         mysql_client=mysql_client,
         llm=llm,
+        companion_tables=companion_tables,
     )
     graph = build_text_to_sql_graph(deps)
 
