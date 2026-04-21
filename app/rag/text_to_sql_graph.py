@@ -284,6 +284,12 @@ def _make_augment_schemas_node(deps: TextToSqlDeps):
             )
             return {}
 
+        injected_names = [s["table_name"] for s in extra]
+        logger.info(
+            "%s companion 매핑 주입 성공 %d개: %s",
+            pfx, len(injected_names), injected_names,
+        )
+
         new_schemas = schemas + extra
         logger.info(
             "%s 주입 후 스키마 %d개: %s",
