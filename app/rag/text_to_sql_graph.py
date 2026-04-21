@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, TypedDict
 
 from langchain_core.language_models import BaseChatModel
@@ -94,6 +94,9 @@ class TextToSqlDeps:
     kb_searcher: HybridSearcher
     mysql_client: MySQLClient
     llm: BaseChatModel
+    companion_tables: dict[str, list[str]] = field(
+        default_factory=dict
+    )
 
 
 # ────────────────────────────────────────────────────────────────────
@@ -104,7 +107,7 @@ class TextToSqlDeps:
 def _route_after_retrieve(state: TextToSqlState) -> str:
     if state.get("error"):
         return "format_result"
-    return "generate_sql"
+    return "augment_schemas"
 
 
 def _route_after_generate(state: TextToSqlState) -> str:
@@ -230,6 +233,67 @@ def _make_retrieve_context_node(deps: TextToSqlDeps):
         return {"schemas": schemas, "kb_docs": kb_docs}
 
     return retrieve_context_node
+
+
+def _make_augment_schemas_node(deps: TextToSqlDeps):
+    async def augment_schemas_node(
+        state: TextToSqlState,
+    ) -> dict[str, Any]:
+        lbl = state.get("query_label", "")
+        pfx = f"[{lbl}][augment_schemas]" if lbl else "[augment_schemas]"
+
+        schemas = state.get("schemas") or []
+        mapping = deps.companion_tables
+        if not schemas or not mapping:
+            return {}
+
+        existing = {s["table_name"] for s in schemas}
+        to_inject: list[str] = []
+        triggers_log: list[tuple[str, list[str]]] = []
+        for s in schemas:
+            buddies = mapping.get(s["table_name"]) or []
+            added_here: list[str] = []
+            for buddy in buddies:
+                if buddy in existing or buddy in to_inject:
+                    continue
+                to_inject.append(buddy)
+                added_here.append(buddy)
+            if added_here:
+                triggers_log.append(
+                    (s["table_name"], added_here)
+                )
+
+        if not to_inject:
+            logger.info(
+                "%s 동반 테이블 트리거 없음", pfx,
+            )
+            return {}
+
+        for trigger, added in triggers_log:
+            logger.info(
+                "%s 트리거 %s → 주입 대상 %s",
+                pfx, trigger, added,
+            )
+
+        extra = await deps.schema_searcher.fetch_schemas_by_names(
+            to_inject, log_prefix=lbl,
+        )
+        if not extra:
+            logger.info(
+                "%s 주입 대상 조회 결과 없음", pfx,
+            )
+            return {}
+
+        new_schemas = schemas + extra
+        logger.info(
+            "%s 주입 후 스키마 %d개: %s",
+            pfx,
+            len(new_schemas),
+            [s["table_name"] for s in new_schemas],
+        )
+        return {"schemas": new_schemas}
+
+    return augment_schemas_node
 
 
 def _make_generate_sql_node(deps: TextToSqlDeps):
@@ -375,6 +439,9 @@ def build_text_to_sql_graph(
         "retrieve_context", _make_retrieve_context_node(deps)
     )
     builder.add_node(
+        "augment_schemas", _make_augment_schemas_node(deps)
+    )
+    builder.add_node(
         "generate_sql", _make_generate_sql_node(deps)
     )
     builder.add_node(
@@ -389,10 +456,11 @@ def build_text_to_sql_graph(
         "retrieve_context",
         _route_after_retrieve,
         {
-            "generate_sql": "generate_sql",
+            "augment_schemas": "augment_schemas",
             "format_result": "format_result",
         },
     )
+    builder.add_edge("augment_schemas", "generate_sql")
     builder.add_conditional_edges(
         "generate_sql",
         _route_after_generate,
