@@ -128,7 +128,7 @@
   {
     "domain": "liquidation_dividend_process",
     "difficulty": "decomposition",
-    "question": "청산배당이 완료된 DABS별로, 수익자총회 DISPOSAL 가결일부터 청산배당 기준일까지 소요 기간과, 투자자당 평균 실지급액은 각�� 얼마인가요?",
+    "question": "청산배당이 완료된 DABS별로, 수익자총회 DISPOSAL 가결일부터 청산배당 기준일까지 소요 기간과, 투자자당 평균 실지급액은 각각 얼마인가요?",
     "answer": "1) kasa_general_meeting_topic에서 category='DISPOSAL', vote_result='APPROVED'인 안건의 dabs_id와 가결 시점(updated_at)을 조회합니다. 2) kasa_liquidation_dividend에서 각 dabs_id의 record_date를 조회합니다. 3) 소요 기간은 record_date - 가결일로 계산합니다. 4) kasa_liquidation_dividend_payment에서 unpaid_reason IS NULL인 활성 지급 건의 AVG(실지급액)을 dabs별로 산출합니다. 수익자총회 도메인과 청산배당 도메인을 교차 조회해야 합니다.",
     "context": "liquidation_dividend_process.md",
     "tables": ["kasa_general_meeting_topic", "kasa_liquidation_dividend", "kasa_liquidation_dividend_payment"]
@@ -180,5 +180,45 @@
     "answer": "1) kasa_terms_agreement에서 terms=3인 레코드를 member_id별 최신(MAX(id)) 기준으로 is_agreed 값을 구하여, 동의 회원 그룹과 비동의 회원 그룹을 분류합니다. 2) 각 그룹의 member_id로 kasa_offering_subscription에서 status NOT IN ('REQUEST_FAILED','CANCELED')인 청약 이력이 있는 회원을 찾아 참여 회원 수를 COUNT합니다. 3) 참여율은 (참여 회�� 수 / 그룹 전체 회원 수 * 100)입니다. 4) 참여 회원의 평균 청약 건수는 각 그룹의 AVG(회원당 청약 건수)입니다. 약관 동의 도메인과 청약 도메인을 교차 분석하여 마케팅 동의가 실제 투자 행동과 상관관계가 있는지 파악합니다.",
     "context": "terms_agreement_process.md",
     "tables": ["kasa_terms_agreement", "kasa_offering_subscription"]
+  },
+  {
+    "domain": "offering_subscription_process",
+    "difficulty": "decomposition",
+    "question": "상암235빌딩 종목을 청약한 이력이 있고 현재도 해당 종목을 보유 중인 회원 수와, 각 회원의 최초 청약 일자를 알려주세요.",
+    "answer": "두 필터의 교집합 + 보강 데이터 1개. 1) kasa_offering_subscription에서 해당 DABS 청약 회원 목록 (filter). 2) kasa_ledger_dabs_account에서 해당 DABS 보유 좌수>0인 회원 목록 (filter). 3) 각 회원의 MIN(kasa_offering_subscription.created_at) (data). intersect 후 data 병합.",
+    "context": "offering_subscription_process.md",
+    "tables": ["kasa_offering_subscription", "kasa_ledger_dabs_account", "kasa_offering"]
+  },
+  {
+    "domain": "dividend_payment_process",
+    "difficulty": "decomposition",
+    "question": "상암235빌딩 종목의 가장 최근 운용배당을 수령한 회원 중, 마케팅 수신 동의를 했고 최근 6개월 내 라이브 채팅 문의 이력이 있는 회원 수는 몇 명인가요?",
+    "answer": "세 필터의 교집합. 1) 해당 DABS의 최근 배당 수령자 목록 (filter). 2) 마케팅 수신 동의 회원 목록 (filter). 3) 최근 6개월 내 LIVE_CHAT 채널 문의 회원 목록 (filter). intersect 후 COUNT.",
+    "context": "dividend_payment_process.md",
+    "tables": ["kasa_dividend", "kasa_terms_agreement", "kasa_customer_contact"]
+  },
+  {
+    "domain": "market_trading_process",
+    "difficulty": "decomposition",
+    "question": "상암235빌딩 또는 KR011A200008S4 중 하나 이상을 현재 보유하고 있는 회원 목록과 각 회원의 총 보유 좌수를 알려주세요.",
+    "answer": "두 필터의 합집합 + 보강 데이터. 1) 상암235빌딩 보유 회원 (filter). 2) KR011A200008S4 보유 회원 (filter). 3) 각 회원의 해당 두 DABS 보유 좌수 합 (data). union 후 data 병합.",
+    "context": "market_trading_process.md",
+    "tables": ["kasa_ledger_dabs_account"]
+  },
+  {
+    "domain": "offering_subscription_process",
+    "difficulty": "decomposition",
+    "question": "상암235빌딩 종목에 청약한 이력은 있지만 현재 해당 종목을 보유하고 있지 않은 회원 수는 몇 명인가요?",
+    "answer": "두 필터의 차집합. 1) 해당 DABS 청약 이력 회원 (filter). 2) 해당 DABS 현재 보유 회원 (filter). difference(1 - 2) 후 COUNT.",
+    "context": "offering_subscription_process.md",
+    "tables": ["kasa_offering_subscription", "kasa_ledger_dabs_account", "kasa_offering"]
+  },
+  {
+    "domain": "general_meeting_process",
+    "difficulty": "decomposition",
+    "question": "상암235빌딩 종목의 매각 안건 투표에 참여했고 현재 해당 종목을 보유 중인 회원들의 목록과, 각 회원의 행사 의결권수 및 투표 선택(찬성/반대)을 알려주세요.",
+    "answer": "두 필터의 교집합 + 보강 데이터 2개. 1) 해당 DABS의 DISPOSAL 안건에 투표한 회원 (filter). 2) 해당 DABS 현재 보유 회원 (filter). 3) 각 회원의 행사 의결권수 (data). 4) 각 회원의 투표 선택값 (data). intersect 후 data 2건 병합.",
+    "context": "general_meeting_process.md",
+    "tables": ["kasa_general_meeting_topic", "kasa_general_meeting_topic_vote", "kasa_ledger_dabs_account"]
   }
 ]
