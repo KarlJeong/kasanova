@@ -7,5 +7,10 @@ __pycache__/
 .pytest_cache/
 
 eval/results/
+eval/dataset/eval_dataset.json
+eval/dataset/evaluation_kb_pairs.json
+
+questions.txt
+embedding.txt
 
 .claude/worktree
