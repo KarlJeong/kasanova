@@ -367,7 +367,7 @@ def create_text_to_sql_tool(
             )
             return await _execute_decomposed(graph, plan, literals)
 
-        # 2단계 (단일 경로): 기존 subgraph 1회 호출
+        # 2단계 (단일 경로): 기존 subgraph 1회 호출o
         logger.info(
             "[text_to_sql_tool] 단일 SQL 경로 (reason=%s)",
             plan.reasoning,
